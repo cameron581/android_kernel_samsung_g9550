@@ -46,6 +46,7 @@ extern void s2mm005_manual_JIGON(struct s2mm005_data *usbpd_data, int mode);
 extern void s2mm005_manual_LPM(struct s2mm005_data *usbpd_data, int cmd);
 extern void s2mm005_control_option_command(struct s2mm005_data *usbpd_data, int cmd);
 extern void s2mm005_set_upsm_mode(void);
+extern void s2mm005_set_cabletype_as_TA(void);
 ////////////////////////////////////////////////////////////////////////////////
 // external functions in s2mm005_cc.c
 ////////////////////////////////////////////////////////////////////////////////

@@ -35,6 +35,8 @@
 #include <linux/kthread.h>
 #include <linux/interrupt.h>
 #include <linux/poll.h>
+#include <linux/udp.h>
+#include <linux/sctp.h>
 #include <net/sock.h>
 
 #include <net/ncm.h>
@@ -98,15 +100,18 @@ EXPORT_SYMBOL(kfifo_status);
  */
 void insert_data_kfifo(struct work_struct *pwork) {
     struct knox_socket_metadata *knox_socket_metadata;
-    if(mutex_lock_interruptible(&ncm_lock)) {
-        NCM_LOGE("inserting data into the kfifo failed due to an interuppt \n");
-        goto lock_err;
-    }
+
     knox_socket_metadata = container_of(pwork,struct knox_socket_metadata,work_kfifo);
     if(IS_ERR(knox_socket_metadata)) {
         NCM_LOGE("inserting data into the kfifo failed due to unknown error \n");
         goto err;
     }
+
+    if(mutex_lock_interruptible(&ncm_lock)) {
+        NCM_LOGE("inserting data into the kfifo failed due to an interuppt \n");
+        goto err;
+    }
+
     if(kfifo_initialized(&knox_sock_info)) {
         if(kfifo_is_full(&knox_sock_info)) {
            NCM_LOGD("The kfifo is full and need to free it \n");
@@ -119,10 +124,10 @@ void insert_data_kfifo(struct work_struct *pwork) {
         kfree(knox_socket_metadata);
     }
     mutex_unlock(&ncm_lock);
+    return;
+
     err:
-        mutex_unlock(&ncm_lock);
-        return;
-    lock_err:
+        if(knox_socket_metadata != NULL) kfree(knox_socket_metadata);
         return;
 }
 
@@ -187,11 +192,46 @@ static void update_ncm_flag(unsigned int ncmFlag) {
  */
 static unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state) {
     struct iphdr *ip_header;
-   __be32 masqueraded_source_ip;
-    ip_header = (struct iphdr *)skb_network_header(skb);
-    masqueraded_source_ip = ip_header->saddr;
-    if(skb->sk) {
-        skb->sk->inet_src_masq = masqueraded_source_ip;
+    struct udphdr *udp_header;
+    struct sctphdr *sctp_header;
+
+    if((skb->sk) && (skb->sk->sk_protocol == IPPROTO_TCP)) {
+        return NF_ACCEPT;
+    }
+    else if((skb->sk) && (skb->sk->sk_protocol == IPPROTO_UDP)) {
+        if ((skb->sk->sk_udp_daddr == 0) && (skb->sk->sk_udp_saddr == 0)) {
+            ip_header = (struct iphdr *)skb_network_header(skb);
+            udp_header = (struct udphdr *)skb_transport_header(skb);
+
+            skb->sk->sk_udp_saddr = ip_header->saddr;
+            skb->sk->sk_udp_sport = udp_header->source;
+
+            skb->sk->sk_udp_daddr = ip_header->daddr;
+            skb->sk->sk_udp_dport = udp_header->dest;
+        }
+    }
+    else if((skb->sk) && (skb->sk->sk_protocol == IPPROTO_SCTP)) {
+        if ((skb->sk->sk_udp_daddr == 0) && (skb->sk->sk_udp_saddr == 0)) {
+            ip_header = (struct iphdr *)skb_network_header(skb);
+            sctp_header = (struct sctphdr *)skb_transport_header(skb);
+
+            skb->sk->sk_udp_saddr = ip_header->saddr;
+            skb->sk->sk_udp_daddr = ip_header->daddr;
+            // TO DO : To check how to test the ports of sctp protocols;
+            if(sctp_header != NULL) {
+                skb->sk->sk_udp_sport = sctp_header->source;
+                skb->sk->sk_udp_dport = sctp_header->dest;
+            }
+        }
+    }
+    else {
+        if(skb->sk) {
+            if ((skb->sk->sk_udp_daddr == 0) && (skb->sk->sk_udp_saddr == 0)) {
+                ip_header = (struct iphdr *)skb_network_header(skb);
+                skb->sk->sk_udp_saddr = ip_header->saddr;
+                skb->sk->sk_udp_daddr = ip_header->daddr;
+            }
+        }
     }
     return NF_ACCEPT;
 }

@@ -42,6 +42,7 @@
 #define IPA_COOKIE 0x57831603
 #define MTU_BYTE 1500
 
+#define IPA_EP_NOT_ALLOCATED (-1)
 #define IPA3_MAX_NUM_PIPES 31
 #define IPA_SYS_DESC_FIFO_SZ 0x800
 #define IPA_SYS_TX_DATA_DESC_FIFO_SZ 0x1000
@@ -967,6 +968,10 @@ struct ipa3_uc_wdi_ctx {
 	struct IpaHwStatsWDIInfoData_t *wdi_uc_stats_mmio;
 	void *priv;
 	ipa_uc_ready_cb uc_ready_cb;
+	/* for AP+STA stats update */
+#ifdef IPA_WAN_MSG_IPv6_ADDR_GW_LEN
+	ipa_wdi_meter_notifier_cb stats_notify;
+#endif
 };
 
 /**
@@ -998,6 +1003,7 @@ struct ipa3cm_client_info {
 struct ipa3_smp2p_info {
 	u32 out_base_id;
 	u32 in_base_id;
+	bool ipa_clk_on;
 	bool res_sent;
 };
 
@@ -1202,6 +1208,7 @@ struct ipa3_context {
 	u32 enable_clock_scaling;
 	u32 curr_ipa_clk_rate;
 	bool q6_proxy_clk_vote_valid;
+	struct mutex q6_proxy_clk_vote_mutex;
 	u32 ipa_num_pipes;
 
 	struct ipa3_wlan_comm_memb wc_memb;
@@ -1685,6 +1692,7 @@ int ipa3_resume_wdi_pipe(u32 clnt_hdl);
 int ipa3_suspend_wdi_pipe(u32 clnt_hdl);
 int ipa3_get_wdi_stats(struct IpaHwStatsWDIInfoData_t *stats);
 u16 ipa3_get_smem_restr_bytes(void);
+int ipa3_broadcast_wdi_quota_reach_ind(uint32_t fid, uint64_t num_bytes);
 int ipa3_setup_uc_ntn_pipes(struct ipa_ntn_conn_in_params *in,
 		ipa_notify_cb notify, void *priv, u8 hdr_len,
 		struct ipa_ntn_conn_out_params *outp);
@@ -1725,6 +1733,9 @@ enum ipacm_client_enum ipa3_get_client(int pipe_idx);
 
 bool ipa3_get_client_uplink(int pipe_idx);
 
+int ipa3_get_wlan_stats(struct ipa_get_wdi_sap_stats *wdi_sap_stats);
+
+int ipa3_set_wlan_quota(struct ipa_set_wifi_quota *wdi_quota);
 /*
  * IPADMA
  */
@@ -1920,6 +1931,9 @@ int ipa3_alloc_rule_id(struct idr *rule_ids);
 int ipa3_id_alloc(void *ptr);
 void *ipa3_id_find(u32 id);
 void ipa3_id_remove(u32 id);
+int ipa3_enable_force_clear(u32 request_id, bool throttle_source,
+	u32 source_pipe_bitmask);
+int ipa3_disable_force_clear(u32 request_id);
 
 int ipa3_set_required_perf_profile(enum ipa_voltage_level floor_voltage,
 				  u32 bandwidth_mbps);
@@ -2025,7 +2039,7 @@ int ipa3_uc_panic_notifier(struct notifier_block *this,
 	unsigned long event, void *ptr);
 void ipa3_inc_acquire_wakelock(void);
 void ipa3_dec_release_wakelock(void);
-int ipa3_load_fws(const struct firmware *firmware);
+int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base);
 int ipa3_register_ipa_ready_cb(void (*ipa_ready_cb)(void *), void *user_data);
 const char *ipa_hw_error_str(enum ipa3_hw_errors err_type);
 int ipa_gsi_ch20_wa(void);
@@ -2034,6 +2048,7 @@ void ipa3_recycle_wan_skb(struct sk_buff *skb);
 int ipa3_smmu_map_peer_reg(phys_addr_t phys_addr, bool map);
 int ipa3_smmu_map_peer_buff(u64 iova, phys_addr_t phys_addr,
 	u32 size, bool map);
+void ipa3_reset_freeze_vote(void);
 int ipa3_ntn_init(void);
 int ipa3_get_ntn_stats(struct Ipa3HwStatsNTNInfoData_t *stats);
 struct dentry *ipa_debugfs_get_root(void);

@@ -14,6 +14,7 @@
 #include <linux/power_supply.h>
 #include <linux/wakelock.h>
 #include "include/charger/sm5720_charger.h"
+#include "include/sec_charging_common.h"
 
 enum {
     BSTOUT_5000mV       = 0x0,
@@ -84,28 +85,28 @@ static struct sm5720_charger_oper_info oper_info;
  **/
 static struct sm5720_charger_oper_table_info sm5720_charger_operation_mode_table[] = {
 	/* Charger=ON Mode in a valid Input */
-	{ make_OP_STATUS(0,0,0,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_VBUS,        BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
-    { make_OP_STATUS(1,0,0,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_VBUS,        BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
-    { make_OP_STATUS(1,0,1,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_VBUS,        BSTOUT_5100mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
+	{ make_OP_STATUS(0,0,0,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_VBUS,        BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(1,0,0,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_VBUS,        BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(1,0,1,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_VBUS,        BSTOUT_5200mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
     /* Charger=ON Mode over WPCIN */
-    { make_OP_STATUS(0,1,0,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_WPCIN,       BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,1,0,0,0,0,0), SM5720_CHARGER_OP_MODE_CHG_ON_WPCIN,       BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     /* TX Mode in a valid VBUS */
-    { make_OP_STATUS(1,0,0,0,1,0,0), SM5720_CHARGER_OP_MODE_TX_MODE_VBUS,       BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(1,0,0,0,1,0,0), SM5720_CHARGER_OP_MODE_TX_MODE_VBUS,       BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     { make_OP_STATUS(1,0,0,0,0,1,0), SM5720_CHARGER_OP_MODE_TX_MODE_VBUS,       BSTOUT_9000mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     /* Wireless OTG Mode and Charger=ON */
-    { make_OP_STATUS(0,1,1,0,0,0,0), SM5720_CHARGER_OP_MODE_WPC_OTG_CHG_ON,     BSTOUT_5100mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
-    { make_OP_STATUS(0,1,0,1,0,0,0), SM5720_CHARGER_OP_MODE_WPC_OTG_CHG_ON,     BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,1,1,0,0,0,0), SM5720_CHARGER_OP_MODE_WPC_OTG_CHG_ON,     BSTOUT_5200mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,1,0,1,0,0,0), SM5720_CHARGER_OP_MODE_WPC_OTG_CHG_ON,     BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     /* USB OTG Mode */
-    { make_OP_STATUS(0,0,1,0,0,0,0), SM5720_CHARGER_OP_MODE_USB_OTG,            BSTOUT_5100mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
-    { make_OP_STATUS(0,0,0,1,0,0,0), SM5720_CHARGER_OP_MODE_USB_OTG,            BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,0,1,0,0,0,0), SM5720_CHARGER_OP_MODE_USB_OTG,            BSTOUT_5200mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,0,0,1,0,0,0), SM5720_CHARGER_OP_MODE_USB_OTG,            BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     /* USB OTG and TX Mode */
-    { make_OP_STATUS(0,0,1,0,1,0,0), SM5720_CHARGER_OP_MODE_USB_OTG_TX_MODE,    BSTOUT_5100mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
-    { make_OP_STATUS(0,0,0,1,1,0,0), SM5720_CHARGER_OP_MODE_USB_OTG_TX_MODE,    BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,0,1,0,1,0,0), SM5720_CHARGER_OP_MODE_USB_OTG_TX_MODE,    BSTOUT_5200mV, OTG_CURRENT_1500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,0,0,1,1,0,0), SM5720_CHARGER_OP_MODE_USB_OTG_TX_MODE,    BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     /* TX Mode in NO valid VBUS */
-    { make_OP_STATUS(0,0,0,0,1,0,0), SM5720_CHARGER_OP_MODE_TX_MODE_NOVBUS,     BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
+    { make_OP_STATUS(0,0,0,0,1,0,0), SM5720_CHARGER_OP_MODE_TX_MODE_NOVBUS,     BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     { make_OP_STATUS(0,0,0,0,0,1,0), SM5720_CHARGER_OP_MODE_TX_MODE_NOVBUS,     BSTOUT_9000mV, OTG_CURRENT_500mA, TX_CURRENT_500mA},
     /* Suspend Mode */
-    { make_OP_STATUS(0,0,0,0,0,0,1), SM5720_CHARGER_OP_MODE_SUSPEND,            BSTOUT_5100mV, OTG_CURRENT_500mA, TX_CURRENT_500mA}, /* Reserved */
+    { make_OP_STATUS(0,0,0,0,0,0,1), SM5720_CHARGER_OP_MODE_SUSPEND,            BSTOUT_5200mV, OTG_CURRENT_500mA, TX_CURRENT_500mA}, /* Reserved */
 };
 
 
@@ -171,7 +172,13 @@ static inline int sm5720_charger_oper_change_state(unsigned char new_status)
 		sm5720_charger_oper_set_TX_CURRENT(oper_info.i2c, sm5720_charger_operation_mode_table[i].TX_CURRENT);
 		oper_info.current_table.TX_CURRENT = sm5720_charger_operation_mode_table[i].TX_CURRENT;
 	}
-    if (sm5720_charger_operation_mode_table[i].oper_mode != oper_info.current_table.oper_mode) {
+	if (sm5720_charger_operation_mode_table[i].oper_mode != oper_info.current_table.oper_mode) {
+		/* for RESTART VL Regulator */
+		if (sm5720_charger_operation_mode_table[i].oper_mode == SM5720_CHARGER_OP_MODE_CHG_ON_WPCIN && \
+			oper_info.current_table.oper_mode == SM5720_CHARGER_OP_MODE_CHG_ON_VBUS) {
+			sm5720_charger_oper_set_mode(oper_info.i2c, SM5720_CHARGER_OP_MODE_SUSPEND);
+			msleep(3);
+		}
 		sm5720_charger_oper_set_mode(oper_info.i2c, sm5720_charger_operation_mode_table[i].oper_mode);
 		oper_info.current_table.oper_mode = sm5720_charger_operation_mode_table[i].oper_mode;
 	}

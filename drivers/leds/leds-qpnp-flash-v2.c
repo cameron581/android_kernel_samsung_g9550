@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1076,6 +1076,8 @@ static int qpnp_flash_led_switch_set(struct flash_switch_data *snode, bool on)
 			pr_err("trigger lmh mitigation failed, rc=%d\n", rc);
 			return rc;
 		}
+		/* Wait for LMH mitigation to take effect */
+		udelay(500);
 	}
 
 	if (led->trigger_chgr) {
@@ -1102,13 +1104,19 @@ static int qpnp_flash_led_switch_set(struct flash_switch_data *snode, bool on)
 int qpnp_flash_led_prepare(struct led_trigger *trig, int options,
 					int *max_current)
 {
-	struct led_classdev *led_cdev = trigger_to_lcdev(trig);
+	struct led_classdev *led_cdev;
 	struct flash_switch_data *snode;
 	struct qpnp_flash_led *led;
 	int rc;
 
-	if (!led_cdev) {
+	if (!trig) {
 		pr_err("Invalid led_trigger provided\n");
+		return -EINVAL;
+	}
+
+	led_cdev = trigger_to_lcdev(trig);
+	if (!led_cdev) {
+		pr_err("Invalid led_cdev in trigger %s\n", trig->name);
 		return -EINVAL;
 	}
 
@@ -1160,6 +1168,10 @@ static void qpnp_flash_led_brightness_set(struct led_classdev *led_cdev,
 	struct qpnp_flash_led *led = NULL;
 	int rc;
 
+	/*
+	 * strncmp() must be used here since a prefix comparison is required
+	 * in order to support names like led:switch_0 and led:flash_1.
+	 */
 	if (!strncmp(led_cdev->name, "led:switch", strlen("led:switch"))) {
 		snode = container_of(led_cdev, struct flash_switch_data, cdev);
 		led = dev_get_drvdata(&snode->pdev->dev);
@@ -1208,8 +1220,7 @@ static ssize_t qpnp_flash_led_max_current_show(struct device *dev,
 
 /* sysfs attributes exported by flash_led */
 static struct device_attribute qpnp_flash_led_attrs[] = {
-	__ATTR(max_current, (S_IRUGO | S_IWUSR | S_IWGRP),
-			qpnp_flash_led_max_current_show, NULL),
+	__ATTR(max_current, 0664, qpnp_flash_led_max_current_show, NULL),
 };
 
 static int flash_led_psy_notifier_call(struct notifier_block *nb,
@@ -1569,6 +1580,7 @@ static int qpnp_flash_led_parse_and_register_switch(struct qpnp_flash_led *led,
 	snode->pdev = led->pdev;
 	snode->cdev.brightness_set = qpnp_flash_led_brightness_set;
 	snode->cdev.brightness_get = qpnp_flash_led_brightness_get;
+	snode->cdev.flags |= LED_KEEP_TRIGGER;
 	rc = led_classdev_register(&led->pdev->dev, &snode->cdev);
 	if (rc < 0) {
 		pr_err("Unable to register led switch node\n");
@@ -1733,7 +1745,7 @@ static int qpnp_flash_led_parse_common_dt(struct qpnp_flash_led *led,
 	led->pdata->thermal_hysteresis = -EINVAL;
 	rc = of_property_read_u32(node, "qcom,thermal-hysteresis", &val);
 	if (!rc) {
-		if (led->pdata->pmic_rev_id->pmic_subtype == PM2FALCON_SUBTYPE)
+		if (led->pdata->pmic_rev_id->pmic_subtype == PM660L_SUBTYPE)
 			val = THERMAL_HYST_TEMP_TO_VAL(val, 20);
 		else
 			val = THERMAL_HYST_TEMP_TO_VAL(val, 15);

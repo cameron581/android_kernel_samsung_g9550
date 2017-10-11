@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmutils.h 674174 2016-12-07 06:09:24Z $
+ * $Id: bcmutils.h 701785 2017-05-26 11:08:50Z $
  */
 
 #ifndef	_bcmutils_h_
@@ -990,6 +990,18 @@ C_bcm_count_leading_zeros(uint32 u32arg)
 	}
 	return (32U - shifts);
 }
+
+#ifdef BCM_ASLR_HEAP
+
+#define BCM_NVRAM_OFFSET_TCM	4
+#define BCM_NVRAM_IMG_COMPRS_FACTOR	4
+#define BCM_RNG_SIGNATURE	0xFEEDC0DE
+
+typedef struct bcm_rand_metadata {
+	uint32 signature;	/* host fills it in, FW verfies before reading rand */
+	uint32 count;	/* number of 4byte wide random numbers */
+} bcm_rand_metadata_t;
+#endif /* BCM_ASLR_HEAP */
 
 #ifdef BCMDRIVER
 /*

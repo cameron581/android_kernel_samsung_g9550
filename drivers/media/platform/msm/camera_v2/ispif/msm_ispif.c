@@ -23,6 +23,7 @@
 #include <media/msmb_isp.h>
 #include <linux/ratelimit.h>
 
+#include "msm_isp_util.h"
 #include "msm_ispif.h"
 #include "msm.h"
 #include "msm_sd.h"
@@ -47,7 +48,7 @@
 
 #define ISPIF_TIMEOUT_SLEEP_US                1000
 #define ISPIF_TIMEOUT_ALL_US               1000000
-#define ISPIF_SOF_DEBUG_COUNT                    5
+#define ISPIF_SOF_DEBUG_COUNT                    1000
 
 #undef CDBG
 #ifdef CONFIG_MSMB_CAMERA_DEBUG
@@ -61,6 +62,7 @@ static int msm_ispif_clk_ahb_enable(struct ispif_device *ispif, int enable);
 static int ispif_close_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh);
 static long msm_ispif_subdev_ioctl_unlocked(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg);
+extern void msm_isp_prepare_ispif_dump(int vfe_id, uint32_t frame_id);
 
 int msm_ispif_get_clk_info(struct ispif_device *ispif_dev,
 	struct platform_device *pdev);
@@ -74,7 +76,7 @@ static void msm_ispif_io_dump_reg(struct ispif_device *ispif)
 
 
 static inline int msm_ispif_is_intf_valid(uint32_t csid_version,
-	uint8_t intf_type)
+	enum msm_ispif_vfe_intf intf_type)
 {
 	return ((csid_version <= CSID_VERSION_V22 && intf_type != VFE0) ||
 		(intf_type >= VFE_MAX)) ? false : true;
@@ -1327,6 +1329,8 @@ static void ispif_process_irq(struct ispif_device *ispif,
 			pr_err("%s: [VFE%d] PIX0 frame id: %u\n", __func__, vfe_id,
 				ispif->sof_count[vfe_id].sof_cnt[PIX0]);
 
+		msm_isp_prepare_ispif_dump(vfe_id,
+			ispif->sof_count[vfe_id].sof_cnt[PIX0]);
 		ispif->sof_count[vfe_id].sof_cnt[PIX0]++;
 		ispif->ispif_sof_debug++;
 	}

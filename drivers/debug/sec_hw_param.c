@@ -27,9 +27,13 @@
 #include <soc/qcom/socinfo.h>
 #include <linux/qcom/sec_debug.h>
 #include <linux/qcom/sec_debug_partition.h>
+#include <linux/qcom/sec_hw_param.h>
 
 extern unsigned int system_rev;
 extern char* get_ddr_vendor_name(void);
+extern uint8_t get_ddr_revision_id_1(void);
+extern uint8_t get_ddr_revision_id_2(void);
+extern uint8_t get_ddr_total_density(void);
 extern uint32_t get_ddr_DSF_version(void);
 extern uint8_t get_ddr_rcw_tDQSCK(uint32_t ch, uint32_t cs, uint32_t dq);
 extern uint8_t get_ddr_wr_coarseCDC(uint32_t ch, uint32_t cs, uint32_t dq);
@@ -39,13 +43,68 @@ extern int cpr3_get_fuse_corner_count(int id);
 extern int cpr3_get_fuse_cpr_rev(int id);
 extern int cpr3_get_fuse_speed_bin(int id);
 extern unsigned sec_debug_get_reset_reason(void);
+extern int sec_debug_get_reset_write_cnt(void);
 extern char * sec_debug_get_reset_reason_str(unsigned int reason);
 
-#define MAX_LEN_STR 1024
-#define NUM_PARAM0 3
+#define MAX_LEN_STR 1023
+#define MAX_ETRA_LEN ((MAX_LEN_STR) - (31 + 5))
+#define NUM_PARAM0 5
 
-static ap_health_t *phealth;
+static ap_health_t *phealth = NULL;
 
+void battery_last_dcvs(int cap, int volt, int temp, int curr)
+{
+	uint32_t tail = 0;
+
+	if (phealth == NULL)
+		return;
+
+	if ((phealth->battery.tail & 0xf) >= MAX_BATT_DCVS) {
+		phealth->battery.tail = 0x10;
+	}
+
+	tail = phealth->battery.tail & 0xf;
+
+	phealth->battery.batt[tail].ktime = local_clock();
+	phealth->battery.batt[tail].cap = cap;
+	phealth->battery.batt[tail].volt = volt;
+	phealth->battery.batt[tail].temp = temp;
+	phealth->battery.batt[tail].curr = curr;
+
+	phealth->battery.tail++;
+}
+EXPORT_SYMBOL(battery_last_dcvs);
+
+static void check_format(char *buf, ssize_t *size, int max_len_str)
+{
+	int i = 0, cnt = 0, pos = 0;
+
+	if (!buf || *size <= 0)
+		return;
+
+	if (*size >= max_len_str)
+		*size = max_len_str - 1;
+
+	while (i < *size && buf[i]) {
+		if (buf[i] == '"') {
+			cnt++;
+			pos = i;
+		}
+
+		if (buf[i] == '\n')
+			buf[i] = '/';
+		i++;
+	}
+
+	if (cnt % 2) {
+		if (pos == *size - 1) {
+			buf[*size - 1] = '\0';
+		} else {
+			buf[*size - 1] = '"';
+			buf[*size] = '\0';
+		}
+	}
+}
 
 static ssize_t show_last_dcvs(struct device *dev,
 			         struct device_attribute *attr, char *buf)
@@ -81,6 +140,9 @@ static ssize_t show_last_dcvs(struct device *dev,
 				"\"RR\":\"%s\",",
 				sec_debug_get_reset_reason_str(reset_reason));
 
+	info_size += snprintf((char *)(buf+info_size), MAX_LEN_STR - info_size,
+			"\"RWC\":\"%d\",", sec_debug_get_reset_write_cnt());
+
 	for (i = 0; i < MAX_CLUSTER_NUM; i++) {
 		info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
 				"\"%sKHz\":\"%u\",", prefix[i],
@@ -101,9 +163,20 @@ static ssize_t show_last_dcvs(struct device *dev,
 				"\"%s\":\"%u\",", prefix_vreg[i],
 				phealth->last_dcvs.rpm.mV[i]);
 	}
+	
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"BCAP\":\"%d\",", phealth->last_dcvs.batt.cap);
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"BVOL\":\"%d\",", phealth->last_dcvs.batt.volt);
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"BTEM\":\"%d\",", phealth->last_dcvs.batt.temp);
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"BCUR\":\"%d\",", phealth->last_dcvs.batt.curr);
 
 	// remove , character
 	info_size--;
+
+	check_format(buf, &info_size, MAX_LEN_STR);
 
 	return info_size;
 }
@@ -180,7 +253,7 @@ static ssize_t show_ap_health(struct device *dev,
 				phealth->thermal.gcc_t1_reset_cnt);
 
 	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
-				"\"dTR\":\"%d\",", phealth->thermal.ktm_reset_cnt +
+				"\"dTR\":\"%d\",", phealth->daily_thermal.ktm_reset_cnt +
 				phealth->daily_thermal.gcc_t0_reset_cnt +
 				phealth->daily_thermal.gcc_t1_reset_cnt);
 
@@ -248,6 +321,8 @@ static ssize_t show_ap_health(struct device *dev,
 			"\"dPP\":\"%d\"", phealth->daily_rr.pp);
 
 
+	check_format(buf, &info_size, MAX_LEN_STR);
+
 	return info_size;
 }
 static DEVICE_ATTR(ap_health, 0660, show_ap_health, store_ap_health);
@@ -265,6 +340,15 @@ static ssize_t show_ddr_info(struct device *dev,
 				"\"DSF\":\"%d.%d\",",
 				(get_ddr_DSF_version() >> 16) & 0xFFFF,
 				get_ddr_DSF_version() & 0xFFFF);
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"REV1\":\"%02x\",",
+				get_ddr_revision_id_1());
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"REV2\":\"%02x\",",
+				get_ddr_revision_id_2());
+	info_size += snprintf((char*)(buf+info_size), MAX_LEN_STR - info_size,
+				"\"SIZE\":\"%d\",",
+				get_ddr_total_density());
 
 	for (ch = 0; ch < 2; ch++) {
 		for (cs = 0; cs < 2; cs++) {
@@ -287,6 +371,8 @@ static ssize_t show_ddr_info(struct device *dev,
 
 	// remove , character
 	info_size--;
+
+	check_format(buf, &info_size, MAX_LEN_STR);
 
 	return info_size;
 }
@@ -364,10 +450,11 @@ static ssize_t show_ap_info(struct device *dev,
 			info_size += snprintf((char*)(buf+info_size),
 					MAX_LEN_STR - info_size,
 					",\"%s_OPV_%d\":\"%d\"", prefix[i], corner,
-					get_param0(NUM_PARAM0-1)*1000);
+					get_param0(NUM_PARAM0-3)*1000);
 		}
 	}
 
+	check_format(buf, &info_size, MAX_LEN_STR);
 
 	return info_size;
 }
@@ -377,112 +464,352 @@ static DEVICE_ATTR(ap_info, 0440, show_ap_info, NULL);
 static ssize_t show_extra_info(struct device *dev,
 			         struct device_attribute *attr, char *buf)
 {
-	int offset = 0;
-	char sub_buf[(SEC_DEBUG_EX_INFO_SIZE>>1)] = {0,};
-	int sub_offset = 0;
+	ssize_t offset = 0;
 	unsigned long rem_nsec;
 	u64 ts_nsec;
 	unsigned int reset_reason;
-	struct sec_debug_reset_ex_info *info = NULL;
+
+	rst_exinfo_t *p_rst_exinfo = NULL;
+	_kern_ex_info_t *p_kinfo = NULL;
+	int cpu = -1;
+
+	if(!get_debug_reset_header()) {
+		pr_info("%s : updated nothing.\n", __func__);
+		goto out;
+	}
 
 	reset_reason = sec_debug_get_reset_reason();
-	if (reset_reason == USER_UPLOAD_CAUSE_PANIC) {
+	if (reset_reason < USER_UPLOAD_CAUSE_MIN ||
+		reset_reason > USER_UPLOAD_CAUSE_MAX) {
+		goto out;
+	}
 
-		/* store panic extra info
-		   "KTIME":""	: kernel time
-		   "FAULT":""	: pgd,va,*pgd,*pud,*pmd,*pte
-		   "BUG":""	: bug msg
-		   "PANIC":""	: panic buffer msg
-		   "PC":""		: pc val
-		   "LR":""		: link register val
-		   "STACK":""	: backtrace
-		   "CHIPID":""	: CPU Serial Number
-		   "DBG0":""	: Debugging Option 0
-		   "DBG1":""	: Debugging Option 1
-		   "DBG2":""	: Debugging Option 2
-		   "DBG3":""	: Debugging Option 3
-		   "DBG4":""	: Debugging Option 4
-		   "DBG5":""	: Debugging Option 5
-		   */
+	if (reset_reason == USER_UPLOAD_CAUSE_MANUAL_RESET ||
+		reset_reason == USER_UPLOAD_CAUSE_REBOOT ||
+		reset_reason == USER_UPLOAD_CAUSE_BOOTLOADER_REBOOT ||
+		reset_reason == USER_UPLOAD_CAUSE_POWER_ON) {
+		goto out;
+	}
 
-		info = kmalloc(sizeof(struct sec_debug_reset_ex_info), GFP_KERNEL);
-		if (!info) {
-			pr_err("%s : fail - kmalloc\n", __func__);
-			goto out;
-		}
+	p_rst_exinfo = kmalloc(sizeof(rst_exinfo_t), GFP_KERNEL);
+	if (!p_rst_exinfo) {
+		pr_err("%s : fail - kmalloc\n", __func__);
+		goto out;
+	}
 
-		if (!read_debug_partition(debug_index_reset_ex_info, info)) {
-			pr_err("%s : fail - get param!!\n", __func__);
-			goto out;
-		}
+	if (!read_debug_partition(debug_index_reset_ex_info, p_rst_exinfo)) {
+		pr_err("%s : fail - get param!!\n", __func__);
+		goto out;
+	}
+	p_kinfo = &p_rst_exinfo->kern_ex_info.info;
+	cpu = p_kinfo->cpu;
 
-		ts_nsec = info->ktime;
-		rem_nsec = do_div(ts_nsec, 1000000000);
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"RR\":\"%s\",", sec_debug_get_reset_reason_str(reset_reason));
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"KTIME\":\"%lu.%06lu\",", (unsigned long)ts_nsec, rem_nsec / 1000);
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"RWC\":\"%d\",", sec_debug_get_reset_write_cnt());
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"CPU\":\"%d\",", info->cpu);
+	ts_nsec = p_kinfo->ktime;
+	rem_nsec = do_div(ts_nsec, 1000000000);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"TASK\":\"%s\",", info->task_name);
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"KTIME\":\"%lu.%06lu\",", (unsigned long)ts_nsec, rem_nsec / 1000);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"FAULT\":\"pgd=%016llx VA=%016llx *pgd=%016llx *pud=%016llx *pmd=%016llx *pte=%016llx\",",
-				info->fault_addr[0],info->fault_addr[1],info->fault_addr[2],
-				info->fault_addr[3],info->fault_addr[4],info->fault_addr[5]);
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"CPU\":\"%d\",", p_kinfo->cpu);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"BUG\":\"%s\",", info->bug_buf);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"PANIC\":\"%s\",", info->panic_buf);
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"TASK\":\"%s\",", p_kinfo->task_name);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"PC\":\"%s\",", info->pc);
+	if (p_kinfo->smmu.fsr) {
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"SDN\":\"%s\",", p_kinfo->smmu.dev_name);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"LR\":\"%s\",", info->lr);
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"FSR\":\"%x\",", p_kinfo->smmu.fsr);
 
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"STACK\":\"%s\",", info->backtrace);
+		if (p_kinfo->smmu.fsynr) {
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"FSRY\":\"%x\",", p_kinfo->smmu.fsynr);
 
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG0\":\"Gladiator ERROR - %s\",", info->dbg0);
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"IOVA\":\"%08lx\",", p_kinfo->smmu.iova);
 
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG1\":\"%s\",", "");
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"FAR\":\"%016lx\",", p_kinfo->smmu.far);
 
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG2\":\"%s\",", "");
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"SMN\":\"%s\",", p_kinfo->smmu.mas_name);
 
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG3\":\"%s\",", "");
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"CB\":\"%d\",", p_kinfo->smmu.cbndx);
 
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG4\":\"%s\",", "");
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"SOFT\":\"%016llx\",", p_kinfo->smmu.phys_soft);
 
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG5\":\"%s\"", "");
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"ATOS\":\"%016llx\",", p_kinfo->smmu.phys_atos);
 
-		if (SEC_DEBUG_EX_INFO_SIZE - offset >= sub_offset) {
-			offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-					"%s", sub_buf);
-		} else {
-			/* const 3 is ",\n size */
-			offset += snprintf((char *)buf + (SEC_DEBUG_EX_INFO_SIZE - sub_offset - 3), sub_offset + 3,
-					"\",%s", sub_buf);
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"SID\":\"%x\",", p_kinfo->smmu.sid);
 		}
 	}
+
+	if (p_kinfo->badmode.esr) {
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"BDR\":\"%08x\",", p_kinfo->badmode.reason);
+
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"BDRS\":\"%s\",", p_kinfo->badmode.handler_str);
+
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"BDE\":\"%08x\",", p_kinfo->badmode.esr);
+
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"BDES\":\"%s\",", p_kinfo->badmode.esr_str);
+	}
+
+	if ((cpu > -1) && (cpu < NR_CPUS)) { // 0 ~ 7
+		if (p_kinfo->fault[cpu].esr) {
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"ESR\":\"%08x\",", p_kinfo->fault[cpu].esr);
+
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"FNM\":\"%s\",", p_kinfo->fault[cpu].str);
+
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"FV1\":\"%016llx\",", p_kinfo->fault[cpu].var1);
+
+			offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+					"\"FV2\":\"%016llx\",", p_kinfo->fault[cpu].var2);
+		}
+
+		offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+				"\"FAULT\":\"pgd=%016llx VA=%016llx *pgd=%016llx *pud=%016llx *pmd=%016llx *pte=%016llx\",",
+				p_kinfo->fault[cpu].pte[0], p_kinfo->fault[cpu].pte[1], p_kinfo->fault[cpu].pte[2],
+				p_kinfo->fault[cpu].pte[3], p_kinfo->fault[cpu].pte[4], p_kinfo->fault[cpu].pte[5]);
+	}
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"BUG\":\"%s\",", p_kinfo->bug_buf);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"PANIC\":\"%s\",", p_kinfo->panic_buf);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"PC\":\"%s\",", p_kinfo->pc);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"LR\":\"%s\",", p_kinfo->lr);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"GLE\":\"%s\",", p_kinfo->dbg0);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"UFS\":\"%s\",", p_kinfo->ufs_err);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"DISP\":\"%s\",", p_kinfo->display_err);
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"ROT\":\"W%dC%d\",", get_param0(3), get_param0(4));
+
+	offset += snprintf((char *)buf + offset, MAX_ETRA_LEN - offset,
+			"\"STACK\":\"%s\"", p_kinfo->backtrace);
 out:
-	if (info)
-		kfree(info);
+	if (p_rst_exinfo)
+		kfree(p_rst_exinfo);
+
+	check_format(buf, &offset, MAX_ETRA_LEN);
 
 	return offset;
 }
 
 static DEVICE_ATTR(extra_info, 0440, show_extra_info, NULL);
+
+
+static ssize_t show_extrb_info(struct device *dev,
+			         struct device_attribute *attr, char *buf)
+{
+	ssize_t offset = 0;
+	int idx, cnt, max_cnt;
+	unsigned long rem_nsec;
+	u64 ts_nsec;
+	unsigned int reset_reason;
+
+	rst_exinfo_t *p_rst_exinfo = NULL;
+	__rpm_log_t *pRPMlog = NULL;
+
+	if(!get_debug_reset_header()) {
+		pr_info("%s : updated nothing.\n", __func__);
+		goto out;
+	}
+
+	reset_reason = sec_debug_get_reset_reason();
+	if (reset_reason < USER_UPLOAD_CAUSE_MIN ||
+		reset_reason > USER_UPLOAD_CAUSE_MAX) {
+		goto out;
+	}
+
+	if (reset_reason == USER_UPLOAD_CAUSE_MANUAL_RESET ||
+		reset_reason == USER_UPLOAD_CAUSE_REBOOT ||
+		reset_reason == USER_UPLOAD_CAUSE_BOOTLOADER_REBOOT ||
+		reset_reason == USER_UPLOAD_CAUSE_POWER_ON) {
+		goto out;
+	}
+
+	p_rst_exinfo = kmalloc(sizeof(rst_exinfo_t), GFP_KERNEL);
+	if (!p_rst_exinfo) {
+		pr_err("%s : fail - kmalloc\n", __func__);
+		goto out;
+	}
+
+	if (!read_debug_partition(debug_index_reset_ex_info, p_rst_exinfo)) {
+		pr_err("%s : fail - get param!!\n", __func__);
+		goto out;
+	}
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			"\"RR\":\"%s\",", sec_debug_get_reset_reason_str(reset_reason));
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			"\"RWC\":\"%d\",", sec_debug_get_reset_write_cnt());
+
+	if (p_rst_exinfo->rpm_ex_info.info.magic == RPM_EX_INFO_MAGIC
+		 && p_rst_exinfo->rpm_ex_info.info.nlog > 0) {
+		offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, "\"RPM\":\"");
+
+		if (p_rst_exinfo->rpm_ex_info.info.nlog > 5) {
+			idx = p_rst_exinfo->rpm_ex_info.info.nlog % 5;
+			max_cnt = 5;
+		} else {
+			idx = 0;
+			max_cnt = p_rst_exinfo->rpm_ex_info.info.nlog;
+		}
+
+		for (cnt  = 0; cnt < max_cnt; cnt++, idx++) {
+			pRPMlog = &p_rst_exinfo->rpm_ex_info.info.log[idx % 5];
+
+			ts_nsec = pRPMlog->nsec;
+			rem_nsec = do_div(ts_nsec, 1000000000);
+			
+			offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+					"%lu.%06lu ",
+					(unsigned long)ts_nsec, rem_nsec / 1000);
+			
+			offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+					"%s ",	pRPMlog->msg);
+			
+			offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+					"%x %x %x %x",
+					pRPMlog->arg[0], pRPMlog->arg[1], pRPMlog->arg[2], pRPMlog->arg[3]);
+			
+			if(cnt == max_cnt -1) {
+				offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, "\",");
+			} else {
+				offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, "/");
+			}
+		}
+	}
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			"\"TZ_RR\":\"%s\"", p_rst_exinfo->tz_ex_info.msg);
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			",\"HYP\":\"%s\"", p_rst_exinfo->hyp_ex_info.msg);
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, ",\"LPM\":\"");
+	max_cnt = sizeof(p_rst_exinfo->kern_ex_info.info.lpm_state);
+	max_cnt = max_cnt/sizeof(p_rst_exinfo->kern_ex_info.info.lpm_state[0]);
+	for (idx = 0; idx < max_cnt; idx++) {
+		offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+				"%x", p_rst_exinfo->kern_ex_info.info.lpm_state[idx]);
+		if (idx != max_cnt - 1) {
+			offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, ",");
+		}
+	}
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, "\"");
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, ",\"LR\":\"");
+	max_cnt = sizeof(p_rst_exinfo->kern_ex_info.info.lr_val);
+	max_cnt = max_cnt/sizeof(p_rst_exinfo->kern_ex_info.info.lr_val[0]);
+	for (idx = 0; idx < max_cnt; idx++) {
+		offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+				"%llx", p_rst_exinfo->kern_ex_info.info.lr_val[idx]);
+		if (idx != max_cnt - 1) {
+			offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, ",");
+		}
+	}
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, "\"");
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, ",\"PC\":\"");
+	max_cnt = sizeof(p_rst_exinfo->kern_ex_info.info.pc_val);
+	max_cnt = max_cnt/sizeof(p_rst_exinfo->kern_ex_info.info.pc_val[0]);
+	for (idx = 0; idx < max_cnt; idx++) {
+		offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+				"%llx", p_rst_exinfo->kern_ex_info.info.pc_val[idx]);
+		if (idx != max_cnt - 1) {
+			offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, ",");
+		}
+	}
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset, "\"");
+out:
+	if (p_rst_exinfo)
+		kfree(p_rst_exinfo);
+
+	check_format(buf, &offset, MAX_LEN_STR);
+
+	return offset;
+}
+
+static DEVICE_ATTR(extrb_info, 0440, show_extrb_info, NULL);
+
+static ssize_t show_extrc_info(struct device *dev,
+			         struct device_attribute *attr, char *buf)
+{
+	ssize_t offset = 0;
+	unsigned int reset_reason;
+	char extrc_buf[1024];
+
+	if(!get_debug_reset_header()) {
+		pr_info("%s : updated nothing.\n", __func__);
+		goto out;
+	}
+
+	reset_reason = sec_debug_get_reset_reason();
+	if (reset_reason < USER_UPLOAD_CAUSE_MIN ||
+		reset_reason > USER_UPLOAD_CAUSE_MAX) {
+		goto out;
+	}
+
+	if (reset_reason == USER_UPLOAD_CAUSE_MANUAL_RESET ||
+		reset_reason == USER_UPLOAD_CAUSE_REBOOT ||
+		reset_reason == USER_UPLOAD_CAUSE_BOOTLOADER_REBOOT ||
+		reset_reason == USER_UPLOAD_CAUSE_POWER_ON) {
+		goto out;
+	}
+
+	if (!read_debug_partition(debug_index_reset_extrc_info, &extrc_buf)) {
+		pr_err("%s : fail - get param!!\n", __func__);
+		goto out;
+	}
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			"\"RR\":\"%s\",", sec_debug_get_reset_reason_str(reset_reason));
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			"\"RWC\":\"%d\",", sec_debug_get_reset_write_cnt());
+
+	offset += snprintf((char *)buf + offset, MAX_LEN_STR - offset,
+			"\"LKL\":\"%s\"", &extrc_buf[offset]);
+out:
+	check_format(buf, &offset, MAX_LEN_STR);
+
+	return offset;
+}
+
+static DEVICE_ATTR(extrc_info, 0440, show_extrc_info, NULL);
+
 
 static int sec_hw_param_dbg_part_notifier_callback(
 	struct notifier_block *nfb, unsigned long action, void *data)
@@ -490,6 +817,9 @@ static int sec_hw_param_dbg_part_notifier_callback(
 	switch (action) {
 		case DBG_PART_DRV_INIT_DONE:
 			phealth = ap_health_data_read();
+
+			memset((void *)&(phealth->battery), 0, sizeof(battery_health_t)); 
+			ap_health_data_write(phealth);
 			break;
 		default:
 			return NOTIFY_DONE;
@@ -530,6 +860,14 @@ static int __init sec_hw_param_init(void)
 	}
 
 	if (device_create_file(sec_hw_param_dev, &dev_attr_extra_info) < 0) {
+		pr_err("%s: could not create extra_info sysfs node\n", __func__);
+	}
+
+	if (device_create_file(sec_hw_param_dev, &dev_attr_extrb_info) < 0) {
+		pr_err("%s: could not create extrb_info sysfs node\n", __func__);
+	}
+
+	if (device_create_file(sec_hw_param_dev, &dev_attr_extrc_info) < 0) {
 		pr_err("%s: could not create extra_info sysfs node\n", __func__);
 	}
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -128,6 +128,7 @@
 #define DS_ENHANCER_UPDATE  BIT(5)
 #define DS_VALIDATE         BIT(6)
 #define DS_DIRTY_UPDATE     BIT(7)
+#define DS_PU_ENABLE        BIT(8)
 
 /**
  * Destination Scaler DUAL mode overfetch pixel count
@@ -165,6 +166,14 @@ enum mdss_mdp_mixer_mux {
 	MDSS_MDP_MIXER_MUX_DEFAULT,
 	MDSS_MDP_MIXER_MUX_LEFT,
 	MDSS_MDP_MIXER_MUX_RIGHT,
+};
+
+enum mdss_secure_transition {
+	SECURE_TRANSITION_NONE,
+	SD_NON_SECURE_TO_SECURE,
+	SD_SECURE_TO_NON_SECURE,
+	SC_NON_SECURE_TO_SECURE,
+	SC_SECURE_TO_NON_SECURE,
 };
 
 static inline enum mdss_mdp_sspp_index get_pipe_num_from_ndx(u32 ndx)
@@ -392,6 +401,7 @@ struct mdss_mdp_destination_scaler {
 	u16 last_mixer_height;
 	u32 flags;
 	struct mdp_scale_data_v2 scaler;
+	struct mdss_rect panel_roi;
 };
 
 
@@ -433,6 +443,7 @@ struct mdss_mdp_ctl_intfs_ops {
 struct mdss_mdp_cwb {
 	struct mutex queue_lock;
 	struct list_head data_queue;
+	struct list_head cleanup_queue;
 	int valid;
 	u32 wb_idx;
 	struct mdp_output_layer layer;
@@ -561,6 +572,9 @@ struct mdss_mdp_ctl {
 	bool switch_with_handoff;
 	struct mdss_mdp_avr_info avr_info;
 	bool commit_in_progress;
+	struct mutex ds_lock;
+
+	bool need_vsync_on;
 };
 
 struct mdss_mdp_mixer {
@@ -958,6 +972,8 @@ struct mdss_overlay_private {
 	struct kthread_worker worker;
 	struct kthread_work vsync_work;
 	struct task_struct *thread;
+
+	u8 secure_transition_state;
 };
 
 struct mdss_mdp_set_ot_params {
@@ -1071,9 +1087,9 @@ static inline enum mdss_mdp_pu_type mdss_mdp_get_pu_type(
 
 	if (!is_split_lm(mctl->mfd) || mdss_mdp_is_both_lm_valid(mctl))
 		pu_type = MDSS_MDP_DEFAULT_UPDATE;
-	else if (mctl->mixer_left->valid_roi)
+	else if (mctl->mixer_left && mctl->mixer_left->valid_roi)
 		pu_type = MDSS_MDP_LEFT_ONLY_UPDATE;
-	else if (mctl->mixer_right->valid_roi)
+	else if (mctl->mixer_right && mctl->mixer_right->valid_roi)
 		pu_type = MDSS_MDP_RIGHT_ONLY_UPDATE;
 	else
 		pr_err("%s: invalid pu_type\n", __func__);
@@ -1175,6 +1191,14 @@ static inline int is_dest_scaling_enable(struct mdss_mdp_mixer *mixer)
 {
 	return (test_bit(MDSS_CAPS_DEST_SCALER, mdss_res->mdss_caps_map) &&
 			mixer && mixer->ds && (mixer->ds->flags & DS_ENABLE));
+}
+
+static inline int is_dest_scaling_pu_enable(struct mdss_mdp_mixer *mixer)
+{
+	if (is_dest_scaling_enable(mixer))
+		return (mixer->ds->flags & DS_PU_ENABLE);
+
+	return 0;
 }
 
 static inline u32 get_ds_input_width(struct mdss_mdp_mixer *mixer)
@@ -1294,7 +1318,11 @@ static inline int mdss_mdp_panic_signal_support_mode(
 		IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
 				MDSS_MDP_HW_REV_116) ||
 		IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
-				MDSS_MDP_HW_REV_300))
+				MDSS_MDP_HW_REV_300) ||
+		IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
+				MDSS_MDP_HW_REV_320) ||
+		IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
+				MDSS_MDP_HW_REV_330))
 		signal_mode = MDSS_MDP_PANIC_PER_PIPE_CFG;
 
 	return signal_mode;
@@ -1310,10 +1338,13 @@ static inline struct clk *mdss_mdp_get_clk(u32 clk_idx)
 static inline void mdss_update_sd_client(struct mdss_data_type *mdata,
 							bool status)
 {
-	if (status)
+	if (status) {
 		atomic_inc(&mdata->sd_client_count);
-	else
+	} else {
 		atomic_add_unless(&mdss_res->sd_client_count, -1, 0);
+		if (!atomic_read(&mdss_res->sd_client_count))
+			wake_up_all(&mdata->secure_waitq);
+	}
 }
 
 static inline void mdss_update_sc_client(struct mdss_data_type *mdata,
@@ -1329,12 +1360,21 @@ static inline int mdss_mdp_get_wb_ctl_support(struct mdss_data_type *mdata,
 							bool rotator_session)
 {
 	/*
-	 * Initial control paths are used for primary and external
-	 * interfaces and remaining control paths are used for WB
-	 * interfaces.
+	 * Any control path can be routed to any of the hardware datapaths.
+	 * But there is a HW restriction for 3D Mux block. As the 3D Mux
+	 * settings in the CTL registers are double buffered, if an interface
+	 * uses it and disconnects, then the subsequent interface which gets
+	 * connected should use the same control path in order to clear the
+	 * 3D MUX settings.
+	 * To handle this restriction, we are allowing WB also, to loop through
+	 * all the avialable control paths, so that it can reuse the control
+	 * path left by the external interface, thereby clearing the 3D Mux
+	 * settings.
+	 * The initial control paths can be used by Primary, External and WB.
+	 * The rotator can use the remaining available control paths.
 	 */
 	return rotator_session ? (mdata->nctl - mdata->nmixers_wb) :
-				(mdata->nctl - mdata->nwb);
+		MDSS_MDP_CTL0;
 }
 
 static inline bool mdss_mdp_is_nrt_vbif_client(struct mdss_data_type *mdata,
@@ -1827,7 +1867,7 @@ int mdss_mdp_calib_mode(struct msm_fb_data_type *mfd,
 int mdss_mdp_pipe_handoff(struct mdss_mdp_pipe *pipe);
 int mdss_mdp_smp_handoff(struct mdss_data_type *mdata);
 struct mdss_mdp_pipe *mdss_mdp_pipe_alloc(struct mdss_mdp_mixer *mixer,
-	u32 type, struct mdss_mdp_pipe *left_blend_pipe);
+	u32 off, u32 type, struct mdss_mdp_pipe *left_blend_pipe);
 struct mdss_mdp_pipe *mdss_mdp_pipe_get(u32 ndx,
 	enum mdss_mdp_pipe_rect rect_num);
 struct mdss_mdp_pipe *mdss_mdp_pipe_search(struct mdss_data_type *mdata,
@@ -1964,6 +2004,7 @@ void mdss_mdp_enable_hw_irq(struct mdss_data_type *mdata);
 void mdss_mdp_disable_hw_irq(struct mdss_data_type *mdata);
 
 void mdss_mdp_set_supported_formats(struct mdss_data_type *mdata);
+int mdss_mdp_dest_scaler_setup_locked(struct mdss_mdp_mixer *mixer);
 
 #ifdef CONFIG_FB_MSM_MDP_NONE
 struct mdss_data_type *mdss_mdp_get_mdata(void)

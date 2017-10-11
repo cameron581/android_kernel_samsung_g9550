@@ -789,6 +789,7 @@ void mdss_dp_timing_cfg(struct dss_io_data *ctrl_io,
 	writel_relaxed(data, ctrl_io->base + DP_ACTIVE_HOR_VER);
 }
 
+#ifdef SECDP_BLOCK_DFP_VGA
 void mdss_dp_sw_config_msa(struct dss_io_data *ctrl_io,
 				char lrate, struct dss_io_data *dp_cc_io)
 {
@@ -807,6 +808,63 @@ void mdss_dp_sw_config_msa(struct dss_io_data *ctrl_io,
 	writel_relaxed(mvid, ctrl_io->base + DP_SOFTWARE_MVID);
 	writel_relaxed(nvid, ctrl_io->base + DP_SOFTWARE_NVID);
 }
+#else
+static bool use_fixed_nvid(struct mdss_dp_drv_pdata *dp)
+{
+	/*
+	 * For better interop experience, used a fixed NVID=0x8000
+	 * whenever connected to a VGA dongle downstream
+	 */
+	return mdss_dp_is_dsp_type_vga(dp);
+}
+
+void mdss_dp_sw_config_msa(struct mdss_dp_drv_pdata *dp)
+{
+ 	u32 pixel_m, pixel_n;
+ 	u32 mvid, nvid;
+	u64 mvid_calc;
+	u32 const nvid_fixed = 0x8000;
+	struct dss_io_data *ctrl_io = &dp->ctrl_io;
+	struct dss_io_data *dp_cc_io = &dp->dp_cc_io;
+	u32 lrate_kbps;
+	u64 stream_rate_khz;
+
+	if (use_fixed_nvid(dp)) {
+		pr_debug("use fixed NVID=0x%x\n", nvid_fixed);
+		nvid = nvid_fixed;
+
+		lrate_kbps = dp->link_rate * DP_LINK_RATE_MULTIPLIER /
+			DP_KHZ_TO_HZ;
+		stream_rate_khz = div_u64(dp->panel_data.panel_info.clk_rate,
+			DP_KHZ_TO_HZ);
+		pr_debug("link rate=%dkbps, stream_rate_khz=%lluKhz",
+			lrate_kbps, stream_rate_khz);
+
+		/*
+		 * For intermediate results, use 64 bit arithmetic to avoid
+		 * loss of precision.
+		 */
+		mvid_calc = stream_rate_khz * nvid;
+		mvid_calc = div_u64(mvid_calc, lrate_kbps);
+
+		/*
+		 * truncate back to 32 bits as this final divided value will
+		 * always be within the range of a 32 bit unsigned int.
+		 */
+		mvid = (u32) mvid_calc;
+	} else {
+		pixel_m = readl_relaxed(dp_cc_io->base + MMSS_DP_PIXEL_M);
+		pixel_n = readl_relaxed(dp_cc_io->base + MMSS_DP_PIXEL_N);
+		pr_debug("pixel_m=0x%x, pixel_n=0x%x\n", pixel_m, pixel_n);
+		mvid = (pixel_m & 0xFFFF) * 5;
+		nvid = (0xFFFF & (~pixel_n)) + (pixel_m & 0xFFFF);
+	}
+ 
+	pr_debug("mvid=0x%x, nvid=0x%x\n", mvid, nvid);
+	writel_relaxed(mvid, ctrl_io->base + DP_SOFTWARE_MVID);
+	writel_relaxed(nvid, ctrl_io->base + DP_SOFTWARE_NVID);
+}
+#endif
 
 void mdss_dp_config_misc(struct mdss_dp_drv_pdata *dp, u32 bd, u32 cc)
 {
@@ -876,43 +934,57 @@ void mdss_dp_setup_tr_unit(struct dss_io_data *ctrl_io, u8 link_rate,
 	pr_err("dp_tu=0x%x\n", dp_tu);
 }
 
-void mdss_dp_ctrl_lane_mapping(struct dss_io_data *ctrl_io,
-				struct lane_mapping l_map)
+void mdss_dp_ctrl_lane_mapping(struct dss_io_data *ctrl_io, char *l_map)
 {
 	u8 bits_per_lane = 2;
-	u32 lane_map = ((l_map.lane0 << (bits_per_lane * 0))
-			    | (l_map.lane1 << (bits_per_lane * 1))
-			    | (l_map.lane2 << (bits_per_lane * 2))
-			    | (l_map.lane3 << (bits_per_lane * 3)));
+	u32 lane_map = ((l_map[0] << (bits_per_lane * 0))
+			    | (l_map[1] << (bits_per_lane * 1))
+			    | (l_map[2] << (bits_per_lane * 2))
+			    | (l_map[3] << (bits_per_lane * 3)));
 	pr_debug("%s: lane mapping reg = 0x%x\n", __func__, lane_map);
 	writel_relaxed(lane_map,
 		ctrl_io->base + DP_LOGICAL2PHYSCIAL_LANE_MAPPING);
 }
 
-void mdss_dp_phy_aux_setup(struct dss_io_data *phy_io)
+void mdss_dp_phy_aux_setup(struct dss_io_data *phy_io, u32 *aux_cfg,
+		u32 phy_reg_offset)
 {
+	void __iomem *adjusted_phy_io_base = phy_io->base + phy_reg_offset;
 #ifdef SECDP_AUX_RETRY
 	struct mdss_dp_drv_pdata *dp_drv = container_of(phy_io,
-											struct mdss_dp_drv_pdata, phy_io);
+					struct mdss_dp_drv_pdata, phy_io);
 	int cfg1 = dp_drv->aux_tuning_value[dp_drv->aux_tuning_index];
+
+	writel_relaxed(0x3d, adjusted_phy_io_base + DP_PHY_PD_CTL);
+	writel_relaxed(cfg1, adjusted_phy_io_base + DP_PHY_AUX_CFG1);
+	writel_relaxed(0x00, adjusted_phy_io_base + DP_PHY_AUX_CFG3);
+	writel_relaxed(0x0a, adjusted_phy_io_base + DP_PHY_AUX_CFG4);
+	writel_relaxed(0x26, adjusted_phy_io_base + DP_PHY_AUX_CFG5);
+	writel_relaxed(0x0a, adjusted_phy_io_base + DP_PHY_AUX_CFG6);
+	writel_relaxed(0x03, adjusted_phy_io_base + DP_PHY_AUX_CFG7);
+	writel_relaxed(0xbb, adjusted_phy_io_base + DP_PHY_AUX_CFG8);
+	writel_relaxed(0x03, adjusted_phy_io_base + DP_PHY_AUX_CFG9);
+	writel_relaxed(0x1e, adjusted_phy_io_base + DP_PHY_AUX_INTERRUPT_MASK);
+#else
+	writel_relaxed(0x3d, adjusted_phy_io_base + DP_PHY_PD_CTL);
+
+	/* DP AUX CFG register programming */
+	writel_relaxed(aux_cfg[0], adjusted_phy_io_base + DP_PHY_AUX_CFG0);
+	writel_relaxed(aux_cfg[1], adjusted_phy_io_base + DP_PHY_AUX_CFG1);
+	writel_relaxed(aux_cfg[2], adjusted_phy_io_base + DP_PHY_AUX_CFG2);
+	writel_relaxed(aux_cfg[3], adjusted_phy_io_base + DP_PHY_AUX_CFG3);
+	writel_relaxed(aux_cfg[4], adjusted_phy_io_base + DP_PHY_AUX_CFG4);
+	writel_relaxed(aux_cfg[5], adjusted_phy_io_base + DP_PHY_AUX_CFG5);
+	writel_relaxed(aux_cfg[6], adjusted_phy_io_base + DP_PHY_AUX_CFG6);
+	writel_relaxed(aux_cfg[7], adjusted_phy_io_base + DP_PHY_AUX_CFG7);
+	writel_relaxed(aux_cfg[8], adjusted_phy_io_base + DP_PHY_AUX_CFG8);
+	writel_relaxed(aux_cfg[9], adjusted_phy_io_base + DP_PHY_AUX_CFG9);
+
+	writel_relaxed(0x1f, adjusted_phy_io_base + DP_PHY_AUX_INTERRUPT_MASK);
 #endif
 
-	writel_relaxed(0x3d, phy_io->base + DP_PHY_PD_CTL);
-#ifndef SECDP_AUX_RETRY
-	writel_relaxed(0x13, phy_io->base + DP_PHY_AUX_CFG1);
-#else
-	writel_relaxed(cfg1, phy_io->base + DP_PHY_AUX_CFG1);
-#endif
-	writel_relaxed(0x00, phy_io->base + DP_PHY_AUX_CFG3);
-	writel_relaxed(0x0a, phy_io->base + DP_PHY_AUX_CFG4);
-	writel_relaxed(0x26, phy_io->base + DP_PHY_AUX_CFG5);
-	writel_relaxed(0x0a, phy_io->base + DP_PHY_AUX_CFG6);
-	writel_relaxed(0x03, phy_io->base + DP_PHY_AUX_CFG7);
-	writel_relaxed(0xbb, phy_io->base + DP_PHY_AUX_CFG8);
-	writel_relaxed(0x03, phy_io->base + DP_PHY_AUX_CFG9);
-	writel_relaxed(0x1e, phy_io->base + DP_PHY_AUX_INTERRUPT_MASK);
 #ifdef CONFIG_SEC_DISPLAYPORT
-	pr_debug("DP_PHY_AUX_CFG1: 0x%02x\n", readl_relaxed(phy_io->base + DP_PHY_AUX_CFG1));
+	pr_debug("DP_PHY_AUX_CFG1: 0x%02x\n", readl_relaxed(adjusted_phy_io_base + DP_PHY_AUX_CFG1));
 #endif
 }
 
@@ -1068,22 +1140,20 @@ u32 mdss_dp_usbpd_gen_config_pkt(struct mdss_dp_drv_pdata *dp)
 #endif
 
 void mdss_dp_phy_share_lane_config(struct dss_io_data *phy_io,
-					u8 orientation, u8 ln_cnt)
+		u8 orientation, u8 ln_cnt, u32 phy_reg_offset)
 {
 	u32 info = 0x0;
 
 	info |= (ln_cnt & 0x0F);
 	info |= ((orientation & 0x0F) << 4);
 	pr_debug("Shared Info = 0x%x\n", info);
-	writel_relaxed(info, phy_io->base + DP_PHY_SPARE0);
+	writel_relaxed(info, phy_io->base + phy_reg_offset + DP_PHY_SPARE0);
 }
 
 void mdss_dp_config_audio_acr_ctrl(struct dss_io_data *ctrl_io, char link_rate)
 {
 	u32 acr_ctrl = 0;
 	u32 select = 0;
-
-	acr_ctrl = readl_relaxed(ctrl_io->base + MMSS_DP_AUDIO_ACR_CTRL);
 
 	switch (link_rate) {
 	case DP_LINK_RATE_162:

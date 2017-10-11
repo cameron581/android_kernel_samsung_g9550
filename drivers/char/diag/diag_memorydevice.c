@@ -29,6 +29,7 @@
 #include "diagmem.h"
 #include "diagfwd.h"
 #include "diagfwd_peripheral.h"
+#include "diag_ipc_logging.h"
 
 struct diag_md_info diag_md[NUM_DIAG_MD_DEV] = {
 	{
@@ -198,8 +199,12 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 		wake_up_interruptible(&driver->wait_q);
 	}
 
-	if (!found)
+	if (!found) {
+		pr_err_ratelimited("diag: Unable to find pid\n");
+		DIAG_LOG(DIAG_DEBUG_PERIPHERALS,"Unable to find pid\n");
+		diag_ws_on_copy_fail(DIAG_WS_MUX);
 		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -356,8 +361,8 @@ int diag_md_init()
 			ch->tbl[j].buf = NULL;
 			ch->tbl[j].len = 0;
 			ch->tbl[j].ctx = 0;
-			spin_lock_init(&(ch->lock));
 		}
+		spin_lock_init(&(ch->lock));
 	}
 
 	return 0;

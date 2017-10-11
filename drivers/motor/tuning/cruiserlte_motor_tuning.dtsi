@@ -21,9 +21,9 @@
 		samsung,freq_low = <2 156>;
 		samsung,freq_mid = <2 125>;
 		samsung,freq_high = <3 140>;
-		samsung,freq_alert = <2 119>;
+		samsung,freq_alert = <2 110>;
 		samsung,strength_od = <94>;
-		samsung,strength_default = <67>;
+		samsung,strength_default = <57>;
 	};
 };
 

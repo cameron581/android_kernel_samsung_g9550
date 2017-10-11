@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1365,8 +1365,12 @@
 	(GSI_GSI_REG_BASE_OFFS + 0x0001f018 + 0x4000 * (n))
 #define GSI_EE_n_GSI_EE_GENERIC_CMD_RMSK 0xffffffff
 #define GSI_EE_n_GSI_EE_GENERIC_CMD_MAXn 3
-#define GSI_EE_n_GSI_EE_GENERIC_CMD_OPCODE_BMSK 0xffffffff
+#define GSI_EE_n_GSI_EE_GENERIC_CMD_OPCODE_BMSK 0x1f
 #define GSI_EE_n_GSI_EE_GENERIC_CMD_OPCODE_SHFT 0x0
+#define GSI_EE_n_GSI_EE_GENERIC_CMD_VIRT_CHAN_IDX_BMSK 0x3e0
+#define GSI_EE_n_GSI_EE_GENERIC_CMD_VIRT_CHAN_IDX_SHFT 0x5
+#define GSI_EE_n_GSI_EE_GENERIC_CMD_EE_BMSK 0x3c00
+#define GSI_EE_n_GSI_EE_GENERIC_CMD_EE_SHFT 0xa
 
 /* v1.0 */
 #define GSI_V1_0_EE_n_GSI_HW_PARAM_OFFS(n) \
@@ -1838,5 +1842,7 @@
 #define GSI_INTER_EE_n_SRC_EV_CH_IRQ_CLR_EV_CH_BIT_MAP_BMSK 0xffffffff
 #define GSI_INTER_EE_n_SRC_EV_CH_IRQ_CLR_EV_CH_BIT_MAP_SHFT 0x0
 
+#define GSI_GSI_INST_RAM_BASE_OFFS	0x4000
+#define GSI_GSI_INST_RAM_SIZE		0x4000
 
 #endif /* __GSI_REG_H__ */

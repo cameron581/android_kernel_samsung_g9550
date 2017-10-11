@@ -1450,6 +1450,11 @@ static int req_crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	DMINFO("%s: Mapping block_device %s to dm-req-crypt ok!\n",
 	       __func__, argv[3]);
 ctr_exit:
+#ifdef CONFIG_CRYPTO_FDE_KEY_UPDATE
+	memset(reset_ice_key, 0, ICE_KEY_SIZE);
+	memset(reset_ice_salt, 0, ICE_SALT_SIZE);
+#endif
+
 	if (err)
 		req_crypt_dtr(ti);
 

@@ -67,6 +67,9 @@
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x9040>;
 			};
+			L1_TLB_0: l1-tlb {
+				qcom,dump-size = <0x2000>;
+			};
 		};
 
 		CPU1: cpu@1 {
@@ -86,6 +89,9 @@
 			L1_D_1: l1-dcache {
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x9040>;
+			};
+			L1_TLB_1: l1-tlb {
+				qcom,dump-size = <0x2000>;
 			};
 		};
 
@@ -107,6 +113,9 @@
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x9040>;
 			};
+			L1_TLB_2: l1-tlb {
+				qcom,dump-size = <0x2000>;
+			};
 		};
 
 		CPU3: cpu@3 {
@@ -126,6 +135,9 @@
 			L1_D_3: l1-dcache {
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x9040>;
+			};
+			L1_TLB_3: l1-tlb {
+				qcom,dump-size = <0x2000>;
 			};
 		};
 
@@ -151,6 +163,9 @@
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x12000>;
 			};
+			L1_TLB_100: l1-tlb {
+				qcom,dump-size = <0x4800>;
+			};
 		};
 
 		CPU5: cpu@101 {
@@ -170,6 +185,9 @@
 			L1_D_101: l1-dcache {
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x12000>;
+			};
+			L1_TLB_101: l1-tlb {
+				qcom,dump-size = <0x4800>;
 			};
 		};
 
@@ -191,6 +209,9 @@
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x12000>;
 			};
+			L1_TLB_102: l1-tlb {
+				qcom,dump-size = <0x4800>;
+			};
 		};
 
 		CPU7: cpu@103 {
@@ -210,6 +231,9 @@
 			L1_D_103: l1-dcache {
 				compatible = "arm,arch-cache";
 				qcom,dump-size = <0x12000>;
+			};
+			L1_TLB_103: l1-tlb {
+				qcom,dump-size = <0x4800>;
 			};
 		};
 
@@ -1480,12 +1504,248 @@
 
 	spss_utils: qcom,spss_utils {
 		compatible = "qcom,spss-utils";
-		/* spss test fuse physical address */
-		qcom,spss-fuse-addr = <0x007841c4 0x4>;
-		qcom,spss-fuse-bit = <27>;
+		/* spss fuses physical address */
+		qcom,spss-fuse1-addr = <0x007841c4>;
+		qcom,spss-fuse1-bit = <27>;
+		qcom,spss-fuse2-addr = <0x0078413c>;
+		qcom,spss-fuse2-bit = <31>;
 		qcom,spss-test-firmware-name = "spss";    /* default name */
 		qcom,spss-prod-firmware-name = "spss1p";  /* 8 chars max */
+		qcom,spss-hybr-firmware-name = "spss1h";  /* 8 chars max */
+		qcom,spss-debug-reg-addr = <0x01d06020>;
 		status = "ok";
+	};
+
+
+	pcie0: qcom,pcie@01c00000 {
+		compatible = "qcom,pci-msm";
+		cell-index = <0>;
+
+		reg = <0x1c00000 0x2000>,
+		      <0x1c06000 0x1000>,
+		      <0x1b000000 0xf1d>,
+		      <0x1b000f20 0xa8>,
+		      <0x1b100000 0x100000>,
+		      <0x1b200000 0x100000>,
+		      <0x1b300000 0xd00000>;
+
+		reg-names = "parf", "phy", "dm_core", "elbi",
+				"conf", "io", "bars";
+
+		#address-cells = <3>;
+		#size-cells = <2>;
+		ranges = <0x01000000 0x0 0x1b200000 0x1b200000 0x0 0x100000>,
+			<0x02000000 0x0 0x1b300000 0x1b300000 0x0 0xd00000>;
+		interrupt-parent = <&pcie0>;
+		interrupts = <0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
+				20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35
+				36 37>;
+		#interrupt-cells = <1>;
+		interrupt-map-mask = <0 0 0 0xffffffff>;
+		interrupt-map = <0 0 0 0 &intc 0 0 405 0
+				0 0 0 1 &intc 0 0 135 0
+				0 0 0 2 &intc 0 0 136 0
+				0 0 0 3 &intc 0 0 138 0
+				0 0 0 4 &intc 0 0 139 0
+				0 0 0 5 &intc 0 0 278 0
+				0 0 0 6 &intc 0 0 576 0
+				0 0 0 7 &intc 0 0 577 0
+				0 0 0 8 &intc 0 0 578 0
+				0 0 0 9 &intc 0 0 579 0
+				0 0 0 10 &intc 0 0 580 0
+				0 0 0 11 &intc 0 0 581 0
+				0 0 0 12 &intc 0 0 582 0
+				0 0 0 13 &intc 0 0 583 0
+				0 0 0 14 &intc 0 0 584 0
+				0 0 0 15 &intc 0 0 585 0
+				0 0 0 16 &intc 0 0 586 0
+				0 0 0 17 &intc 0 0 587 0
+				0 0 0 18 &intc 0 0 588 0
+				0 0 0 19 &intc 0 0 589 0
+				0 0 0 20 &intc 0 0 590 0
+				0 0 0 21 &intc 0 0 591 0
+				0 0 0 22 &intc 0 0 592 0
+				0 0 0 23 &intc 0 0 593 0
+				0 0 0 24 &intc 0 0 594 0
+				0 0 0 25 &intc 0 0 595 0
+				0 0 0 26 &intc 0 0 596 0
+				0 0 0 27 &intc 0 0 597 0
+				0 0 0 28 &intc 0 0 598 0
+				0 0 0 29 &intc 0 0 599 0
+				0 0 0 30 &intc 0 0 600 0
+				0 0 0 31 &intc 0 0 601 0
+				0 0 0 32 &intc 0 0 602 0
+				0 0 0 33 &intc 0 0 603 0
+				0 0 0 34 &intc 0 0 604 0
+				0 0 0 35 &intc 0 0 605 0
+				0 0 0 36 &intc 0 0 606 0
+				0 0 0 37 &intc 0 0 607 0>;
+
+		interrupt-names = "int_msi", "int_a", "int_b", "int_c",
+				"int_d", "int_global_int",
+				"msi_0", "msi_1", "msi_2", "msi_3",
+				"msi_4", "msi_5", "msi_6", "msi_7",
+				"msi_8", "msi_9", "msi_10", "msi_11",
+				"msi_12", "msi_13", "msi_14", "msi_15",
+				"msi_16", "msi_17", "msi_18", "msi_19",
+				"msi_20", "msi_21", "msi_22", "msi_23",
+				"msi_24", "msi_25", "msi_26", "msi_27",
+				"msi_28", "msi_29", "msi_30", "msi_31";
+
+		qcom,phy-sequence = <0x804 0x01 0x00
+					0x034 0x14 0x00
+					0x138 0x30 0x00
+					0x048 0x0f 0x00
+					0x15c 0x06 0x00
+					0x090 0x01 0x00
+					0x088 0x20 0x00
+					0x0f0 0x00 0x00
+					0x0f8 0x01 0x00
+					0x0f4 0xc9 0x00
+					0x11c 0xff 0x00
+					0x120 0x3f 0x00
+					0x164 0x01 0x00
+					0x154 0x00 0x00
+					0x148 0x0a 0x00
+					0x05C 0x19 0x00
+					0x038 0x90 0x00
+					0x0b0 0x82 0x00
+					0x0c0 0x03 0x00
+					0x0bc 0x55 0x00
+					0x0b8 0x55 0x00
+					0x0a0 0x00 0x00
+					0x09c 0x0d 0x00
+					0x098 0x04 0x00
+					0x13c 0x00 0x00
+					0x060 0x08 0x00
+					0x068 0x16 0x00
+					0x070 0x34 0x00
+					0x15c 0x06 0x00
+					0x138 0x33 0x00
+					0x03c 0x02 0x00
+					0x040 0x0e 0x00
+					0x080 0x04 0x00
+					0x0dc 0x00 0x00
+					0x0d8 0x3f 0x00
+					0x00c 0x09 0x00
+					0x010 0x00 0x00 // SSC enable(0x01), disable(0x00)
+					0x01c 0x40 0x00
+					0x020 0x01 0x00
+					0x014 0x02 0x00
+					0x018 0x00 0x00
+					0x024 0x7e 0x00
+					0x028 0x15 0x00
+					0x244 0x02 0x00
+					0x2a4 0x12 0x00
+					0x260 0x10 0x00
+					0x28c 0x06 0x00
+					0x504 0x03 0x00
+					0x500 0x1c 0x00
+					0x50c 0x14 0x00
+					0x4d4 0x0a 0x00
+					0x4d8 0x04 0x00
+					0x4dc 0x1a 0x00
+					0x434 0x4b 0x00
+					0x414 0x04 0x00
+					0x40c 0x04 0x00
+					0x4f8 0x00 0x00
+					0x4fc 0x80 0x00
+					0x51c 0x40 0x00
+					0x444 0x71 0x00
+					0x43c 0x40 0x00
+					0x854 0x04 0x00
+					0x62c 0x52 0x00
+					0x9ac 0x00 0x00
+					0x8a0 0x01 0x00
+					0x9e0 0x00 0x00
+					0x9dc 0x01 0x00
+					0x9a8 0x00 0x00
+					0x8a4 0x01 0x00
+					0x8a8 0x73 0x00
+					0x9d8 0x99 0x00
+					0x9b0 0x03 0x00
+					0x804 0x03 0x00
+					0x800 0x00 0x00
+					0x808 0x03 0x00>;
+
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&pcie0_clkreq_default
+			&pcie0_perst_default
+			&pcie0_wake_default
+			&pcie0_shubwake_default>;
+
+		pinctrl-1 = <&pcie0_clkreq_sleep
+			&pcie0_perst_default
+			&pcie0_wake_sleep
+			&pcie0_shubwake_sleep>;
+
+		perst-gpio = <&tlmm 35 0>;
+		wake-gpio = <&tlmm 37 0>;
+
+		gdsc-vdd-supply = <&gdsc_pcie_0>;
+		vreg-1.8-supply = <&pm8998_l2>;
+		vreg-0.9-supply = <&pm8998_l1>;
+		vreg-cx-supply = <&pm8998_s1_level>;
+
+		qcom,vreg-1.8-voltage-level = <1200000 1200000 24000>;
+		qcom,vreg-0.9-voltage-level = <880000 880000 24000>;
+		qcom,vreg-cx-voltage-level = <RPM_SMD_REGULATOR_LEVEL_BINNING
+						RPM_SMD_REGULATOR_LEVEL_SVS 0>;
+
+		qcom,l1-supported;
+		qcom,l1ss-supported;
+		qcom,aux-clk-sync;
+		qcom,common-clk-en;
+		qcom,clk-power-manage-en;
+
+		qcom,ep-latency = <10>;
+
+		qcom,ep-wakeirq;
+
+		linux,pci-domain = <0>;
+
+		qcom,msi-gicm-addr = <0x17a00040>;
+		qcom,msi-gicm-base = <0x260>;
+
+		qcom,pcie-phy-ver = <0x20>;
+		qcom,use-19p2mhz-aux-clk;
+
+		iommus = <&anoc1_smmu>;
+		qcom,smmu-exist;
+		qcom,smmu-sid-base = <0x1480>;
+
+		qcom,msm-bus,name = "pcie0";
+		qcom,msm-bus,num-cases = <2>;
+		qcom,msm-bus,num-paths = <1>;
+		qcom,msm-bus,vectors-KBps =
+				<45 512 0 0>,
+				<45 512 500 800>;
+
+		clocks = <&clock_gcc clk_gcc_pcie_0_pipe_clk>,
+			<&clock_gcc clk_ln_bb_clk1>,
+			<&clock_gcc clk_gcc_pcie_0_aux_clk>,
+			<&clock_gcc clk_gcc_pcie_0_cfg_ahb_clk>,
+			<&clock_gcc clk_gcc_pcie_0_mstr_axi_clk>,
+			<&clock_gcc clk_gcc_pcie_0_slv_axi_clk>,
+			<&clock_gcc clk_gcc_pcie_clkref_clk>;
+
+		clock-names = "pcie_0_pipe_clk", "pcie_0_ref_clk_src",
+				"pcie_0_aux_clk", "pcie_0_cfg_ahb_clk",
+				"pcie_0_mstr_axi_clk", "pcie_0_slv_axi_clk",
+				"pcie_0_ldo";
+
+		max-clock-frequency-hz = <0>, <0>, <19200000>,
+					<0>, <0>, <0>, <0>, <0>, <0>,
+					<0>, <0>, <0>, <0>, <0>, <0>,
+					<0>, <0>;
+
+		resets = <&clock_gcc PCIE_PHY_BCR>,
+			 <&clock_gcc PCIE_0_PHY_BCR>,
+			 <&clock_gcc PCIE_0_PHY_BCR>;
+
+		reset-names = "pcie_phy_reset",
+				"pcie_0_phy_reset",
+				"pcie_0_phy_pipe_reset";
 	};
 
 	sdhc_2: sdhci@c0a4900 {
@@ -1519,6 +1779,8 @@
 				<81 512 2048000 4096000>; /* Max. bandwidth */
 		qcom,bus-bw-vectors-bps = <0 400000 20000000 25000000 50000000
 						100000000 200000000 4294967295>;
+
+		qcom,sdr104-wa;
 
 		status = "disabled";
 	};
@@ -1699,6 +1961,7 @@
 				"utmi_clk", "sleep_clk", "xo";
 
 		qcom,core-clk-rate = <120000000>;
+		qcom,core-clk-rate-hs = <60000000>;
 
 		resets = <&clock_gcc USB_30_BCR>;
 		reset-names = "core_reset";
@@ -1712,7 +1975,8 @@
 			tx-fifo-resize;
 			snps,nominal-elastic-buffer;
 			snps,disable-clk-gating;
-			snps,hird_thresh = <0x10>;
+			snps,has-lpm-erratum;
+			snps,hird-threshold = /bits/ 8 <0x10>;
 			snps,num-gsi-evt-buffs = <0x3>;
 		};
 
@@ -2031,10 +2295,9 @@
 		clock-names = "xo", "iface_clk", "bus_clk",
 			      "mem_clk", "gpll0_mss_clk", "snoc_axi_clk",
 			      "mnoc_axi_clk", "qdss_clk";
-		qcom,proxy-clock-names = "xo", "qdss_clk";
-		qcom,active-clock-names = "iface_clk", "bus_clk", "mem_clk",
-					  "gpll0_mss_clk", "snoc_axi_clk",
-					  "mnoc_axi_clk";
+		qcom,proxy-clock-names = "xo", "qdss_clk", "mem_clk";
+		qcom,active-clock-names = "iface_clk", "bus_clk",
+			"gpll0_mss_clk", "snoc_axi_clk", "mnoc_axi_clk";
 
 		interrupts = <0 448 1>;
 		vdd_cx-supply = <&pm8998_s1_level>;
@@ -2153,6 +2416,7 @@
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor12";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "gpu_1";
 		};
 		sensor_information13: qcom,sensor-information-13 {
 			qcom,sensor-type = "tsens";
@@ -2169,41 +2433,46 @@
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor15";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "modem_dsp";
 		};
 		sensor_information16: qcom,sensor-information-16 {
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor16";
-			qcom,alias-name = "pop_mem";
 			qcom,scaling-factor = <10>;
 		};
 		sensor_information17: qcom,sensor-information-17 {
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor17";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "hvx";
 		};
 		sensor_information18: qcom,sensor-information-18 {
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor18";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "camera";
 		};
 		sensor_information19: qcom,sensor-information-19 {
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor19";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "multi_media_ss";
 		};
 		sensor_information20: qcom,sensor-information-20 {
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor20";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "modem";
 		};
 		sensor_information21: qcom,sensor-information-21 {
 			qcom,sensor-type = "tsens";
 			qcom,sensor-name = "tsens_tz_sensor21";
 			qcom,scaling-factor = <10>;
+			qcom,alias-name = "pop_mem";
 		};
 		sensor_information22: qcom,sensor-information-22 {
 			qcom,sensor-type =  "alarm";
-			qcom,sensor-name = "pm8994_tz";
+			qcom,sensor-name = "pm8998_tz";
 			qcom,scaling-factor = <1000>;
 		};
 		sensor_information23: qcom,sensor-information-23 {
@@ -2438,237 +2707,6 @@
 		};
 	};
 
-	pcie0: qcom,pcie@01c00000 {
-		compatible = "qcom,pci-msm";
-		cell-index = <0>;
-
-		reg = <0x1c00000 0x2000>,
-		      <0x1c06000 0x1000>,
-		      <0x1b000000 0xf1d>,
-		      <0x1b000f20 0xa8>,
-		      <0x1b100000 0x100000>,
-		      <0x1b200000 0x100000>,
-		      <0x1b300000 0xd00000>;
-
-		reg-names = "parf", "phy", "dm_core", "elbi",
-				"conf", "io", "bars";
-
-		#address-cells = <3>;
-		#size-cells = <2>;
-		ranges = <0x01000000 0x0 0x1b200000 0x1b200000 0x0 0x100000>,
-			<0x02000000 0x0 0x1b300000 0x1b300000 0x0 0xd00000>;
-		interrupt-parent = <&pcie0>;
-		interrupts = <0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
-				20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35
-				36 37>;
-		#interrupt-cells = <1>;
-		interrupt-map-mask = <0 0 0 0xffffffff>;
-		interrupt-map = <0 0 0 0 &intc 0 0 405 0
-				0 0 0 1 &intc 0 0 135 0
-				0 0 0 2 &intc 0 0 136 0
-				0 0 0 3 &intc 0 0 138 0
-				0 0 0 4 &intc 0 0 139 0
-				0 0 0 5 &intc 0 0 278 0
-				0 0 0 6 &intc 0 0 576 0
-				0 0 0 7 &intc 0 0 577 0
-				0 0 0 8 &intc 0 0 578 0
-				0 0 0 9 &intc 0 0 579 0
-				0 0 0 10 &intc 0 0 580 0
-				0 0 0 11 &intc 0 0 581 0
-				0 0 0 12 &intc 0 0 582 0
-				0 0 0 13 &intc 0 0 583 0
-				0 0 0 14 &intc 0 0 584 0
-				0 0 0 15 &intc 0 0 585 0
-				0 0 0 16 &intc 0 0 586 0
-				0 0 0 17 &intc 0 0 587 0
-				0 0 0 18 &intc 0 0 588 0
-				0 0 0 19 &intc 0 0 589 0
-				0 0 0 20 &intc 0 0 590 0
-				0 0 0 21 &intc 0 0 591 0
-				0 0 0 22 &intc 0 0 592 0
-				0 0 0 23 &intc 0 0 593 0
-				0 0 0 24 &intc 0 0 594 0
-				0 0 0 25 &intc 0 0 595 0
-				0 0 0 26 &intc 0 0 596 0
-				0 0 0 27 &intc 0 0 597 0
-				0 0 0 28 &intc 0 0 598 0
-				0 0 0 29 &intc 0 0 599 0
-				0 0 0 30 &intc 0 0 600 0
-				0 0 0 31 &intc 0 0 601 0
-				0 0 0 32 &intc 0 0 602 0
-				0 0 0 33 &intc 0 0 603 0
-				0 0 0 34 &intc 0 0 604 0
-				0 0 0 35 &intc 0 0 605 0
-				0 0 0 36 &intc 0 0 606 0
-				0 0 0 37 &intc 0 0 607 0>;
-
-		interrupt-names = "int_msi", "int_a", "int_b", "int_c",
-				"int_d", "int_global_int",
-				"msi_0", "msi_1", "msi_2", "msi_3",
-				"msi_4", "msi_5", "msi_6", "msi_7",
-				"msi_8", "msi_9", "msi_10", "msi_11",
-				"msi_12", "msi_13", "msi_14", "msi_15",
-				"msi_16", "msi_17", "msi_18", "msi_19",
-				"msi_20", "msi_21", "msi_22", "msi_23",
-				"msi_24", "msi_25", "msi_26", "msi_27",
-				"msi_28", "msi_29", "msi_30", "msi_31";
-
-		qcom,phy-sequence = <0x804 0x01 0x00
-					0x034 0x14 0x00
-					0x138 0x30 0x00
-					0x048 0x0f 0x00
-					0x15c 0x06 0x00
-					0x090 0x01 0x00
-					0x088 0x20 0x00
-					0x0f0 0x00 0x00
-					0x0f8 0x01 0x00
-					0x0f4 0xc9 0x00
-					0x11c 0xff 0x00
-					0x120 0x3f 0x00
-					0x164 0x01 0x00
-					0x154 0x00 0x00
-					0x148 0x0a 0x00
-					0x05C 0x19 0x00
-					0x038 0x90 0x00
-					0x0b0 0x82 0x00
-					0x0c0 0x03 0x00
-					0x0bc 0x55 0x00
-					0x0b8 0x55 0x00
-					0x0a0 0x00 0x00
-					0x09c 0x0d 0x00
-					0x098 0x04 0x00
-					0x13c 0x00 0x00
-					0x060 0x08 0x00
-					0x068 0x16 0x00
-					0x070 0x34 0x00
-					0x15c 0x06 0x00
-					0x138 0x33 0x00
-					0x03c 0x02 0x00
-					0x040 0x0e 0x00
-					0x080 0x04 0x00
-					0x0dc 0x00 0x00
-					0x0d8 0x3f 0x00
-					0x00c 0x09 0x00
-					0x010 0x00 0x00 // SSC enable(0x01), disable(0x00)
-					0x01c 0x40 0x00
-					0x020 0x01 0x00
-					0x014 0x02 0x00
-					0x018 0x00 0x00
-					0x024 0x7e 0x00
-					0x028 0x15 0x00
-					0x244 0x02 0x00
-					0x2a4 0x12 0x00
-					0x260 0x10 0x00
-					0x28c 0x06 0x00
-					0x504 0x03 0x00
-					0x500 0x1c 0x00
-					0x50c 0x14 0x00
-					0x4d4 0x0a 0x00
-					0x4d8 0x04 0x00
-					0x4dc 0x1a 0x00
-					0x434 0x4b 0x00
-					0x414 0x04 0x00
-					0x40c 0x04 0x00
-					0x4f8 0x00 0x00
-					0x4fc 0x80 0x00
-					0x51c 0x40 0x00
-					0x444 0x71 0x00
-					0x43c 0x40 0x00
-					0x854 0x04 0x00
-					0x62c 0x52 0x00
-					0x9ac 0x00 0x00
-					0x8a0 0x01 0x00
-					0x9e0 0x00 0x00
-					0x9dc 0x01 0x00
-					0x9a8 0x00 0x00
-					0x8a4 0x01 0x00
-					0x8a8 0x73 0x00
-					0x9d8 0x99 0x00
-					0x9b0 0x03 0x00
-					0x804 0x03 0x00
-					0x800 0x00 0x00
-					0x808 0x03 0x00>;
-
-		pinctrl-names = "default", "sleep";
-		pinctrl-0 = <&pcie0_clkreq_default
-			&pcie0_perst_default
-			&pcie0_wake_default
-			&pcie0_shubwake_default>;
-
-		pinctrl-1 = <&pcie0_clkreq_sleep
-			&pcie0_perst_default
-			&pcie0_wake_sleep
-			&pcie0_shubwake_sleep>;
-
-		perst-gpio = <&tlmm 35 0>;
-		wake-gpio = <&tlmm 37 0>;
-
-		gdsc-vdd-supply = <&gdsc_pcie_0>;
-		vreg-1.8-supply = <&pm8998_l2>;
-		vreg-0.9-supply = <&pm8998_l1>;
-		vreg-cx-supply = <&pm8998_s1_level>;
-
-		qcom,vreg-1.8-voltage-level = <1200000 1200000 24000>;
-		qcom,vreg-0.9-voltage-level = <880000 880000 24000>;
-		qcom,vreg-cx-voltage-level = <RPM_SMD_REGULATOR_LEVEL_BINNING
-						RPM_SMD_REGULATOR_LEVEL_SVS 0>;
-
-		qcom,l1-supported;
-		qcom,l1ss-supported;
-		qcom,aux-clk-sync;
-		qcom,common-clk-en;
-		qcom,clk-power-manage-en;
-
-		qcom,ep-latency = <10>;
-
-		qcom,ep-wakeirq;
-
-		linux,pci-domain = <0>;
-
-		qcom,msi-gicm-addr = <0x17a00040>;
-		qcom,msi-gicm-base = <0x260>;
-
-		qcom,pcie-phy-ver = <0x20>;
-		qcom,use-19p2mhz-aux-clk;
-
-		iommus = <&anoc1_smmu>;
-		qcom,smmu-exist;
-		qcom,smmu-sid-base = <0x1480>;
-
-		qcom,msm-bus,name = "pcie0";
-		qcom,msm-bus,num-cases = <2>;
-		qcom,msm-bus,num-paths = <1>;
-		qcom,msm-bus,vectors-KBps =
-				<45 512 0 0>,
-				<45 512 500 800>;
-
-		clocks = <&clock_gcc clk_gcc_pcie_0_pipe_clk>,
-			<&clock_gcc clk_ln_bb_clk1>,
-			<&clock_gcc clk_gcc_pcie_0_aux_clk>,
-			<&clock_gcc clk_gcc_pcie_0_cfg_ahb_clk>,
-			<&clock_gcc clk_gcc_pcie_0_mstr_axi_clk>,
-			<&clock_gcc clk_gcc_pcie_0_slv_axi_clk>,
-			<&clock_gcc clk_gcc_pcie_clkref_clk>;
-
-		clock-names = "pcie_0_pipe_clk", "pcie_0_ref_clk_src",
-				"pcie_0_aux_clk", "pcie_0_cfg_ahb_clk",
-				"pcie_0_mstr_axi_clk", "pcie_0_slv_axi_clk",
-				"pcie_0_ldo";
-
-		max-clock-frequency-hz = <0>, <0>, <19200000>,
-					<0>, <0>, <0>, <0>, <0>, <0>,
-					<0>, <0>, <0>, <0>, <0>, <0>,
-					<0>, <0>;
-
-		resets = <&clock_gcc PCIE_PHY_BCR>,
-			 <&clock_gcc PCIE_0_PHY_BCR>,
-			 <&clock_gcc PCIE_0_PHY_BCR>;
-
-		reset-names = "pcie_phy_reset",
-				"pcie_0_phy_reset",
-				"pcie_0_phy_pipe_reset";
-	};
-
 	qcom,bcl {
 		compatible = "qcom,bcl";
 		qcom,bcl-enable;
@@ -2835,6 +2873,11 @@
 			reg = <0x6b0 32>;
 		};
 
+		kaslr_offset@6d0 {
+			compatible = "qcom,msm-imem-kaslr_offset";
+			reg = <0x6d0 12>;
+		};
+
 		pil@94c {
 			compatible = "qcom,msm-imem-pil";
 			reg = <0x94c 200>;
@@ -2918,6 +2961,38 @@
 			qcom,dump-node = <&L1_D_103>;
 			qcom,dump-id = <0x87>;
 		};
+		qcom,l1_tlb_dump0 {
+			qcom,dump-node = <&L1_TLB_0>;
+			qcom,dump-id = <0x20>;
+		};
+		qcom,l1_tlb_dump1 {
+			qcom,dump-node = <&L1_TLB_1>;
+			qcom,dump-id = <0x21>;
+		};
+		qcom,l1_tlb_dump2 {
+			qcom,dump-node = <&L1_TLB_2>;
+			qcom,dump-id = <0x22>;
+		};
+		qcom,l1_tlb_dump3 {
+			qcom,dump-node = <&L1_TLB_3>;
+			qcom,dump-id = <0x23>;
+		};
+		qcom,l1_tlb_dump100 {
+			qcom,dump-node = <&L1_TLB_100>;
+			qcom,dump-id = <0x24>;
+		};
+		qcom,l1_tlb_dump101 {
+			qcom,dump-node = <&L1_TLB_101>;
+			qcom,dump-id = <0x25>;
+		};
+		qcom,l1_tlb_dump102 {
+			qcom,dump-node = <&L1_TLB_102>;
+			qcom,dump-id = <0x26>;
+		};
+		qcom,l1_tlb_dump103 {
+			qcom,dump-node = <&L1_TLB_103>;
+			qcom,dump-id = <0x27>;
+		};
 	};
 
 	ssc_sensors: qcom,msm-ssc-sensors {
@@ -2977,7 +3052,25 @@
 
 	};
 
-	 qcom,icnss@18800000 {
+	msm_ath10k_wlan: qcom,msm_ath10k_wlan {
+		status = "disabled";
+		compatible = "qcom,wcn3990-wifi";
+		interrupts =
+			<0 413 0 /* CE0 */ >,
+			<0 414 0 /* CE1 */ >,
+			<0 415 0 /* CE2 */ >,
+			<0 416 0 /* CE3 */ >,
+			<0 417 0 /* CE4 */ >,
+			<0 418 0 /* CE5 */ >,
+			<0 420 0 /* CE6 */ >,
+			<0 421 0 /* CE7 */ >,
+			<0 422 0 /* CE8 */ >,
+			<0 423 0 /* CE9 */ >,
+			<0 424 0 /* CE10 */ >,
+			<0 425 0 /* CE11 */ >;
+	};
+
+	qcom,icnss@18800000 {
 		compatible = "qcom,icnss";
 		reg = <0x18800000 0x800000>,
 		      <0x10AC000 0x20>,
@@ -3155,6 +3248,7 @@
 
 &gdsc_cpp {
 	parent-supply = <&gdsc_camss_top>;
+	qcom,support-hw-trigger;
 	status = "ok";
 };
 
@@ -3197,3 +3291,4 @@
 #include "msm-rdbg.dtsi"
 #include "msm8998-blsp.dtsi"
 #include "msm8998-audio.dtsi"
+#include "msm-smb138x.dtsi"

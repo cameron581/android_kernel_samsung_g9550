@@ -452,6 +452,8 @@ struct mmc_card {
 	u8 *cached_ext_csd;
 	bool cmdq_init;
 	struct mmc_bkops_info bkops;
+	bool err_in_sdr104;
+	bool sdr104_blocked;
 
 	struct device_attribute error_count;
 	struct mmc_card_error_log err_log[10];

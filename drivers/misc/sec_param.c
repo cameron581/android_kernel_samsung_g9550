@@ -226,6 +226,14 @@ bool sec_get_param(enum sec_param_index index, void *value)
 		memcpy(value, param_data->param_lcd_resolution,
 			sizeof(param_data->param_lcd_resolution));
 		break;
+	case param_index_api_gpio_test:
+		memcpy(value, &(param_data->api_gpio_test),
+			sizeof(param_data->api_gpio_test));
+		break;
+	case param_index_api_gpio_test_result:
+		memcpy(value, param_data->api_gpio_test_result,
+			sizeof(param_data->api_gpio_test_result));
+		break;
 #ifdef CONFIG_SEC_NAD
 	case param_index_qnad:
 		mutex_lock(&sec_param_mutex);
@@ -354,6 +362,14 @@ bool sec_set_param(enum sec_param_index index, void *value)
 	case param_index_lcd_resolution:
 		memcpy(&(param_data->param_lcd_resolution),
 				value, sizeof(param_data->param_lcd_resolution));
+		break;
+	case param_index_api_gpio_test:
+		memcpy(&(param_data->api_gpio_test),
+				value, sizeof(param_data->api_gpio_test));
+		break;
+	case param_index_api_gpio_test_result:
+		memcpy(&(param_data->api_gpio_test_result),
+				value, sizeof(param_data->api_gpio_test_result));
 		break;
 #ifdef CONFIG_SEC_NAD
 	case param_index_qnad:

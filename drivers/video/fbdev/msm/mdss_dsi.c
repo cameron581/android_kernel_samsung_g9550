@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -412,25 +412,43 @@ static int mdss_dsi_panel_power_lp(struct mdss_panel_data *pdata, int enable)
 		return -EINVAL;
 	}
 
+	/* To check previous voltage */
+	get_voltage = regulator_get_voltage(target_vreg->vreg);
+
 	if (enable) {
-		rc = regulator_set_voltage(
+		if (get_voltage != vdd->lpm_power_control_supply_min_voltage) {
+			rc = regulator_set_voltage(
 					target_vreg->vreg,
 					vdd->lpm_power_control_supply_min_voltage,
 					vdd->lpm_power_control_supply_max_voltage);
-		get_voltage = regulator_get_voltage(target_vreg->vreg);
-		pr_info("%s : enable=%d, get_voltage=%d\n", __func__, enable, get_voltage);
-		if (get_voltage != vdd->lpm_power_control_supply_min_voltage)
-			panic("Voltage Set Fail to LPM");
-
+			if (rc < 0) {
+				pr_info("%s : Voltage Set Fail enable=%d voltage : %d rc : %d\n", __func__, 
+					enable, vdd->lpm_power_control_supply_min_voltage, rc);
+			} else {
+				get_voltage = regulator_get_voltage(target_vreg->vreg);
+				pr_info("%s : enable=%d, current get_voltage=%d rc : %d\n", __func__, enable, get_voltage, rc);
+			}
+		} else
+			pr_info("%s : enable=%d, previous voltage : %d\n", __func__, enable, get_voltage);
 	} else {
-		rc = regulator_set_voltage(
-					target_vreg->vreg,
-					target_vreg->min_voltage,
-					target_vreg->max_voltage);
-		get_voltage = regulator_get_voltage(target_vreg->vreg);
-		pr_info("%s : enable=%d, get_voltage=%d\n", __func__, enable, get_voltage);
-		if (get_voltage != target_vreg->min_voltage)
-			panic("Voltage Set Fail to NORMAL");
+		if (get_voltage != target_vreg->min_voltage) {
+			rc = regulator_set_voltage(
+						target_vreg->vreg,
+						target_vreg->min_voltage,
+						target_vreg->max_voltage);
+			if (rc < 0) {
+				pr_info("%s : Voltage Set Fail enable=%d voltage : %d rc : %d\n", __func__, 
+					enable, target_vreg->min_voltage, rc);
+				panic("Voltage Set Fail to NORMAL");
+			} else {
+				get_voltage = regulator_get_voltage(target_vreg->vreg);
+				pr_info("%s : enable=%d, current get_voltage=%d\n", __func__, enable, get_voltage);
+
+				if (get_voltage != target_vreg->min_voltage)
+					panic("Voltage Set Fail to NORMAL");
+			}
+		} else
+			pr_info("%s : enable=%d, previous voltage : %d\n", __func__, enable, get_voltage);
 	}
 
 	pr_info("%s : enable=%d\n", __func__, enable);
@@ -658,7 +676,11 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 			mp->vreg_config[i].post_off_sleep = tmp;
 		}
 
-		pr_info("%s: %s min=%d, max=%d, enable=%d, disable=%d, preonsleep=%d, postonsleep=%d, preoffsleep=%d, postoffsleep=%d\n",
+		mp->vreg_config[i].lp_disable_allowed =
+			of_property_read_bool(supply_node,
+			"qcom,supply-lp-mode-disable-allowed");
+
+		pr_debug("%s: %s min=%d, max=%d, enable=%d, disable=%d, preonsleep=%d, postonsleep=%d, preoffsleep=%d, postoffsleep=%d lp_disable_allowed=%d\n",
 			__func__,
 			mp->vreg_config[i].vreg_name,
 			mp->vreg_config[i].min_voltage,
@@ -668,8 +690,8 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 			mp->vreg_config[i].pre_on_sleep,
 			mp->vreg_config[i].post_on_sleep,
 			mp->vreg_config[i].pre_off_sleep,
-			mp->vreg_config[i].post_off_sleep
-			);
+			mp->vreg_config[i].post_off_sleep,
+			mp->vreg_config[i].lp_disable_allowed);
 		++i;
 	}
 
@@ -716,6 +738,7 @@ struct buf_data {
 	char *string_buf; /* cmd buf as string, 3 bytes per number */
 	int sblen; /* string buffer length */
 	int sync_flag;
+	struct mutex dbg_mutex; /* mutex to synchronize read/write/flush */
 };
 
 struct mdss_dsi_debugfs_info {
@@ -805,6 +828,7 @@ static ssize_t mdss_dsi_cmd_read(struct file *file, char __user *buf,
 	char *bp;
 	ssize_t ret = 0;
 
+	mutex_lock(&pcmds->dbg_mutex);
 	if (*ppos == 0) {
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
@@ -823,6 +847,7 @@ static ssize_t mdss_dsi_cmd_read(struct file *file, char __user *buf,
 		buffer = kmalloc(bsize, GFP_KERNEL);
 		if (!buffer) {
 			pr_err("%s: Failed to allocate memory\n", __func__);
+			mutex_unlock(&pcmds->dbg_mutex);
 			return -ENOMEM;
 		}
 
@@ -858,10 +883,12 @@ static ssize_t mdss_dsi_cmd_read(struct file *file, char __user *buf,
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
 		pcmds->sblen = 0;
+		mutex_unlock(&pcmds->dbg_mutex);
 		return 0; /* the end */
 	}
 	ret = simple_read_from_buffer(buf, count, ppos, pcmds->string_buf,
 				      pcmds->sblen);
+	mutex_unlock(&pcmds->dbg_mutex);
 	return ret;
 }
 
@@ -873,6 +900,7 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 	int blen = 0;
 	char *string_buf;
 
+	mutex_lock(&pcmds->dbg_mutex);
 	if (*ppos == 0) {
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
@@ -884,6 +912,7 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 	string_buf = krealloc(pcmds->string_buf, blen + 1, GFP_KERNEL);
 	if (!string_buf) {
 		pr_err("%s: Failed to allocate memory\n", __func__);
+		mutex_unlock(&pcmds->dbg_mutex);
 		return -ENOMEM;
 	}
 
@@ -893,6 +922,7 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 	string_buf[blen] = '\0';
 	pcmds->string_buf = string_buf;
 	pcmds->sblen = blen;
+	mutex_unlock(&pcmds->dbg_mutex);
 	return ret;
 }
 
@@ -903,8 +933,12 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 	char *buf, *bufp, *bp;
 	struct dsi_ctrl_hdr *dchdr;
 
-	if (!pcmds->string_buf)
+	mutex_lock(&pcmds->dbg_mutex);
+
+	if (!pcmds->string_buf) {
+		mutex_unlock(&pcmds->dbg_mutex);
 		return 0;
+	}
 
 	/*
 	 * Allocate memory for command buffer
@@ -917,6 +951,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 		kfree(pcmds->string_buf);
 		pcmds->string_buf = NULL;
 		pcmds->sblen = 0;
+		mutex_unlock(&pcmds->dbg_mutex);
 		return -ENOMEM;
 	}
 
@@ -941,6 +976,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 			pr_err("%s: dtsi cmd=%x error, len=%d\n",
 				__func__, dchdr->dtype, dchdr->dlen);
 			kfree(buf);
+			mutex_unlock(&pcmds->dbg_mutex);
 			return -EINVAL;
 		}
 		bp += sizeof(*dchdr);
@@ -952,6 +988,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 		pr_err("%s: dcs_cmd=%x len=%d error!\n", __func__,
 				bp[0], len);
 		kfree(buf);
+		mutex_unlock(&pcmds->dbg_mutex);
 		return -EINVAL;
 	}
 
@@ -964,6 +1001,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 		pcmds->buf = buf;
 		pcmds->blen = blen;
 	}
+	mutex_unlock(&pcmds->dbg_mutex);
 	return 0;
 }
 
@@ -978,6 +1016,7 @@ struct dentry *dsi_debugfs_create_dcs_cmd(const char *name, umode_t mode,
 				struct dentry *parent, struct buf_data *cmd,
 				struct dsi_panel_cmds ctrl_cmds)
 {
+	mutex_init(&cmd->dbg_mutex);
 	cmd->buf = ctrl_cmds.buf;
 	cmd->blen = ctrl_cmds.blen;
 	cmd->string_buf = NULL;
@@ -1528,10 +1567,17 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 	if (vdd->support_hall_ic) {
 		/* Panel Select */
-		if (vdd->display_status_dsi[DISPLAY_1].hall_ic_status == HALL_IC_OPEN)
-			mdss_samsung_dsi_pinctrl_set_state(ctrl_pdata, SAMSUNG_GPIO_CONTROL0, false); /*OPEN : Internal PANEL */
-		else
-			mdss_samsung_dsi_pinctrl_set_state(ctrl_pdata, SAMSUNG_GPIO_CONTROL0, true); /*CLOSE : External PANEL */
+		if(vdd->select_panel_use_expander_gpio) {
+			if (vdd->hall_ic_status == HALL_IC_OPEN)
+				gpio_direction_output(vdd->select_panel_gpio, 0);
+			else
+				gpio_direction_output(vdd->select_panel_gpio, 1);
+		} else {
+			if (vdd->hall_ic_status == HALL_IC_OPEN)
+				mdss_samsung_dsi_pinctrl_set_state(ctrl_pdata, SAMSUNG_GPIO_CONTROL0, false); /*OPEN : Internal PANEL */
+			else
+				mdss_samsung_dsi_pinctrl_set_state(ctrl_pdata, SAMSUNG_GPIO_CONTROL0, true); /*CLOSE : External PANEL */
+		}
 	}
 #endif
 
@@ -2303,6 +2349,13 @@ static int __mdss_dsi_dfps_update_clks(struct mdss_panel_data *pdata,
 		MIPI_OUTP((sctrl_pdata->ctrl_base) + DSI_DYNAMIC_REFRESH_CTRL,
 				0x00);
 
+	rc = mdss_dsi_phy_pll_reset_status(ctrl_pdata);
+	if (rc) {
+		pr_err("%s: pll cannot be locked reset core ready failed %d\n",
+			__func__, rc);
+		goto dfps_timeout;
+	}
+
 	__mdss_dsi_mask_dfps_errors(ctrl_pdata, false);
 	if (sctrl_pdata)
 		__mdss_dsi_mask_dfps_errors(sctrl_pdata, false);
@@ -2387,6 +2440,21 @@ static int mdss_dsi_check_params(struct mdss_dsi_ctrl_pdata *ctrl, void *arg)
 		rc = 1;
 
 	return rc;
+}
+
+static void mdss_dsi_avr_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+		int enabled)
+{
+	u32 data = MIPI_INP((ctrl_pdata->ctrl_base) + 0x10);
+
+	/* DSI_VIDEO_MODE_CTRL */
+	if (enabled)
+		data |= BIT(29); /* AVR_SUPPORT_ENABLED */
+	else
+		data &= ~BIT(29);
+
+	MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x10, data);
+	MDSS_XLOG(ctrl_pdata->ndx, enabled, data);
 }
 
 static int mdss_dsi_dfps_config(struct mdss_panel_data *pdata, int new_fps)
@@ -2715,6 +2783,23 @@ static struct device_node *mdss_dsi_get_fb_node_cb(struct platform_device *pdev)
 	return fb_node;
 }
 
+static void mdss_dsi_timing_db_ctrl(struct mdss_dsi_ctrl_pdata *ctrl,
+						int enable)
+{
+	if (!ctrl || !ctrl->timing_db_mode ||
+		(ctrl->shared_data->hw_rev < MDSS_DSI_HW_REV_201))
+		return;
+
+	mdss_dsi_clk_ctrl(ctrl, ctrl->dsi_clk_handle,
+		  MDSS_DSI_CORE_CLK, MDSS_DSI_CLK_ON);
+	MIPI_OUTP((ctrl->ctrl_base + 0x1e8), enable);
+	wmb(); /* ensure timing db is disabled */
+	MIPI_OUTP((ctrl->ctrl_base + 0x1e4), enable);
+	wmb(); /* ensure timing flush is disabled */
+	mdss_dsi_clk_ctrl(ctrl, ctrl->dsi_clk_handle,
+		  MDSS_DSI_CORE_CLK, MDSS_DSI_CLK_OFF);
+}
+
 static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 				  int event, void *arg)
 {
@@ -2902,6 +2987,12 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 				queue_delayed_work(ctrl_pdata->workq,
 					&ctrl_pdata->dba_work, HZ);
 		}
+		break;
+	case MDSS_EVENT_DSI_TIMING_DB_CTRL:
+		mdss_dsi_timing_db_ctrl(ctrl_pdata, (int)(unsigned long)arg);
+		break;
+	case MDSS_EVENT_AVR_MODE:
+		mdss_dsi_avr_config(ctrl_pdata, (int)(unsigned long) arg);
 		break;
 	default:
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
@@ -4341,6 +4432,10 @@ static int mdss_dsi_parse_gpio_params(struct platform_device *ctrl_pdev,
 		"qcom,platform-bklight-en-gpio", 0);
 	if (!gpio_is_valid(ctrl_pdata->bklt_en_gpio))
 		pr_info("%s: bklt_en gpio not specified\n", __func__);
+
+	ctrl_pdata->bklt_en_gpio_invert =
+			of_property_read_bool(ctrl_pdev->dev.of_node,
+				"qcom,platform-bklight-en-gpio-invert");
 
 	ctrl_pdata->rst_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
 			 "qcom,platform-reset-gpio", 0);

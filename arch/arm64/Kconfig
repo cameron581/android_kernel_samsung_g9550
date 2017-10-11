@@ -51,6 +51,7 @@ config ARM64
 	select HAVE_ALIGNED_STRUCT_PAGE if SLUB
 	select HAVE_ARCH_AUDITSYSCALL
 	select HAVE_ARCH_BITREVERSE
+	select HAVE_ARCH_HARDENED_USERCOPY
 	select HAVE_ARCH_HUGE_VMAP
 	select HAVE_ARCH_JUMP_LABEL
 	select HAVE_ARCH_KASAN if SPARSEMEM_VMEMMAP && !(ARM64_16K_PAGES && ARM64_VA_BITS_48)
@@ -455,6 +456,15 @@ config CAVIUM_ERRATUM_22375
 
 	  If unsure, say Y.
 
+config CAVIUM_ERRATUM_23144
+	bool "Cavium erratum 23144: ITS SYNC hang on dual socket system"
+	depends on NUMA
+	default y
+	help
+	  ITS SYNC command hang for cross node io and collections/cpu mapping.
+
+	  If unsure, say Y.
+
 config CAVIUM_ERRATUM_23154
 	bool "Cavium erratum 23154: Access to ICC_IAR1_EL1 is not sync'ed"
 	default y
@@ -462,6 +472,17 @@ config CAVIUM_ERRATUM_23154
 	  The gicv3 of ThunderX requires a modified version for
 	  reading the IAR status to ensure data synchronization
 	  (access to icc_iar1_el1 is not sync'ed before and after).
+
+	  If unsure, say Y.
+
+config CAVIUM_ERRATUM_27456
+	bool "Cavium erratum 27456: Broadcast TLBI instructions may cause icache corruption"
+	default y
+	help
+	  On ThunderX T88 pass 1.x through 2.1 parts, broadcast TLBI
+	  instructions may cause the icache to become corrupted if it
+	  contains data for a non-current ASID.  The fix is to
+	  invalidate the icache when changing the mm context.
 
 	  If unsure, say Y.
 
@@ -955,7 +976,7 @@ config RANDOMIZE_BASE
 
 config RANDOMIZE_MODULE_REGION_FULL
 	bool "Randomize the module region independently from the core kernel"
-	depends on RANDOMIZE_BASE
+	depends on RANDOMIZE_BASE && !DYNAMIC_FTRACE
 	default y
 	help
 	  Randomizes the location of the module region without considering the
@@ -1096,6 +1117,7 @@ config SEC_FACTORY
 	bool "when it comes to sec factory mode"
 	default n
 	select SEC_NAD
+	select SEC_PANIC_PCIE_ERR
 	help
 		It will support a sec factory mode
 
@@ -1260,19 +1282,89 @@ config MACH_DREAM2QLTE_CHN_LDU
                 help
                   Support for Samsung DREAM2QLTE CHN LDU device.
 
-config SEC_BAIKALQLTE_PROJECT
+config SEC_GREATQLTE_PROJECT
         depends on ARCH_MSM8998
                 default n
-                bool "Samsung BAIKALQLTE Project"
+                bool "Samsung GREATQLTE Project"
                 help
-                  Support for Samsung BAIKALQLTE Project
+                  Support for Samsung GREATQLTE Project
 
-config MACH_BAIKALQLTE_SINGLE
-        depends on SEC_BAIKALQLTE_PROJECT
+config MACH_GREATQLTE_SINGLE
+        depends on SEC_GREATQLTE_PROJECT
                 default n
-                bool "Samsung BAIKALQLTE USA SQ"
+                bool "Samsung GREATQLTE USA SQ"
                 help
-                  Support for Samsung BAIKALQLTE USA SQ device.
+                  Support for Samsung GREATQLTE USA SQ device.
+
+config MACH_GREATQLTE_CHNZC
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE CHN OPEN"
+                help
+                  Support for Samsung GREATQLTE CHN OPEN device.
+
+config MACH_GREATQLTE_CHNHK
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE CHN HK"
+                help
+                  Support for Samsung GREATQLTE CHN HK device.
+
+config MACH_GREATQLTE_CHN_LDU
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE CHN LDU"
+                help
+                  Support for Samsung GREATQLTE CHN LDU device.
+
+config MACH_GREATQLTE_CHNZM
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE CHN CMCC"
+                help
+                  Support for Samsung GREATQLTE CHN CMCC device.
+
+config MACH_GREATQLTE_CAN_SINGLE
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE CAN SQ"
+                help
+                  Support for Samsung GREATQLTE CAN SQ device.
+
+config MACH_GREATQLTE_KDI
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE JPN KDI"
+                help
+                  Support for Samsung GREATQLTE JPN KDI device.
+
+config MACH_GREATQLTE_DCM
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE JPN DCM"
+                help
+                  Support for Samsung GREATQLTE JPN DCM device.
+
+config MACH_GREATQLTE_LDU
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE USA LDU"
+                help
+                  Support for Samsung GREATQLTE USA LDU device.
+
+config MACH_GREATQLTE_OPEN
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung GREATQLTE USA OPEN"
+                help
+                  Support for Samsung GREATQLTE USA OPEN device.
+
+config MACH_DREAM2QGREATLTE_SINGLE
+        depends on SEC_GREATQLTE_PROJECT
+                default n
+                bool "Samsung DREAM2QGREATLTE USA SQ"
+                help
+		  Support for Samsung DREAM2QGREATLTE USA SQ device.
 
 config SEC_CRUISERLTE_PROJECT
 	depends on ARCH_MSM8998
@@ -1287,6 +1379,20 @@ config MACH_CRUISERLTE_USA_ATT
                 bool "Samsung CRUISERLTE USA ATT"
                 help
                   Support for Samsung CRUISERLTE USA ATT device.
+
+config SEC_KELLYLTE_PROJECT
+	depends on ARCH_MSM8998
+		default n
+		bool "Samsung KELLYLTE Project"
+		help
+		  Support for Samsung KELLYLTE Project
+
+config MACH_KELLYLTE_CHN_CTC
+	depends on SEC_KELLYLTE_PROJECT
+		default n
+		bool "Samsung KELLYLTE CHN CTC"
+		help
+		  Support for Samsung KELLYLTE CHN CTC device.
 
 config DRV_SAMSUNG
 	bool "samsung device dedicated drivers option"

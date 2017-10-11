@@ -744,6 +744,8 @@ struct SEC_UFS_counting {
 };
 #endif
 
+/* to debug 22bit page corruption issue */
+#define TEMP_CHECK_PAGE_CORRUPTION	1
 /**
  * struct ufs_hba - per adapter private structure
  * @mmio_base: UFSHCI base register address
@@ -924,6 +926,9 @@ struct ufs_hba {
 	u32 saved_err;
 	u32 saved_uic_err;
 	u32 saved_ce_err;
+#ifdef TEMP_CHECK_PAGE_CORRUPTION
+	int skip_reading_mem_test;
+#endif
 	bool silence_err_logs;
 	bool force_host_reset;
 
@@ -1016,6 +1021,9 @@ struct ufs_hba {
 
 	bool full_init_linereset;
 	struct pinctrl *pctrl;
+	
+	int			latency_hist_enabled;
+	struct io_latency_state io_lat_s;
 	int hw_reset_gpio;
 
 	struct device_attribute unique_number_attr;
@@ -1530,6 +1538,9 @@ static inline void ufshcd_vops_pm_qos_req_end(struct ufs_hba *hba,
 	if (hba->var && hba->var->pm_qos_vops && hba->var->pm_qos_vops->req_end)
 		hba->var->pm_qos_vops->req_end(hba, req, lock);
 }
+#ifdef TEMP_CHECK_PAGE_CORRUPTION
+void ufshcd_print_debug_regs( void );
+#endif
 
 #define UFS_DEV_ATTR(name, fmt, args...)					\
 static ssize_t ufs_##name##_show (struct device *dev, struct device_attribute *attr, char *buf)	\

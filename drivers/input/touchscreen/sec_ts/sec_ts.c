@@ -825,7 +825,7 @@ int sec_ts_read_calibration_report(struct sec_ts_data *ts)
 	return buf[4];
 }
 
-static void sec_ts_reinit(struct sec_ts_data *ts)
+void sec_ts_reinit(struct sec_ts_data *ts)
 {
 	u8 w_data[2] = {0x00, 0x00};
 	int ret = 0;
@@ -943,7 +943,7 @@ static void sec_ts_read_event(struct sec_ts_data *ts)
 	int remain_event_count = 0;
 
 	/* in LPM, waiting blsp block resume */
-	if (ts->power_status == SEC_TS_STATE_LPM_SUSPEND) {
+	if (ts->power_status == SEC_TS_STATE_LPM) {
 
 		wake_lock_timeout(&ts->wakelock, msecs_to_jiffies(3 * MSEC_PER_SEC));
 		/* waiting for blsp block resuming, if not occurs i2c error */
@@ -2081,6 +2081,7 @@ static int sec_ts_probe(struct i2c_client *client, const struct i2c_device_id *i
 
 	wake_lock_init(&ts->wakelock, WAKE_LOCK_SUSPEND, "tsp_wakelock");
 	init_completion(&ts->resume_done);
+	complete_all(&ts->resume_done);
 
 	if (pdata->always_lpmode)
 		ts->lowpower_mode |= SEC_TS_MODE_SPONGE_FORCE_KEY;
@@ -2485,6 +2486,9 @@ static void sec_ts_read_info_work(struct work_struct *work)
 #ifndef CONFIG_SEC_FACTORY
 	struct sec_ts_test_mode mode;
 	char para = TO_TOUCH_MODE;
+#ifdef USE_PRESSURE_SENSOR
+	short pressure[3] = { 0 };
+#endif
 #endif
 #ifdef USE_PRESSURE_SENSOR
 	int ret;
@@ -2537,6 +2541,39 @@ static void sec_ts_read_info_work(struct work_struct *work)
 	mode.allnode = TEST_MODE_ALL_NODE;
 
 	sec_ts_read_raw_data(ts, NULL, &mode);
+
+	/* run decoded read */
+	memset(&mode, 0x00, sizeof(struct sec_ts_test_mode));
+	mode.type = TYPE_DECODED_DATA;
+	mode.allnode = TEST_MODE_ALL_NODE;
+
+	sec_ts_read_raw_data(ts, NULL, &mode);
+
+#ifdef USE_PRESSURE_SENSOR
+	ret = sec_ts_fix_tmode(ts, TOUCH_SYSTEM_MODE_TOUCH, TOUCH_MODE_STATE_TOUCH);
+	if (ret < 0) {
+		input_err(true, &ts->client->dev, "%s: failed to fix tmode\n",
+				__func__);
+		return;
+	}
+
+	/* run pressure offset data read */
+	read_pressure_data(ts, TYPE_OFFSET_DATA_SEC, pressure);
+	sec_ts_delay(20);
+
+	/* run pressure rawdata read */
+	read_pressure_data(ts, TYPE_RAW_DATA, pressure);
+	sec_ts_delay(20);
+
+	/* run pressure raw delta read  */
+	read_pressure_data(ts, TYPE_REMV_AMB_DATA, pressure);
+	sec_ts_delay(20);
+
+	/* run pressure sigdata read */
+	read_pressure_data(ts, TYPE_SIGNAL_DATA, pressure);
+
+	sec_ts_release_tmode(ts);
+#endif
 #endif
 
 	input_log_fix();
@@ -2654,8 +2691,7 @@ static void sec_ts_input_close(struct input_dev *dev)
 #endif
 	if (ts->lowpower_mode) {
 		sec_ts_set_lowpowermode(ts, TO_LOWPOWER_MODE);
-
-		ts->power_status = SEC_TS_STATE_LPM_RESUME;
+		ts->power_status = SEC_TS_STATE_LPM;
 	} else {
 		sec_ts_stop_device(ts);
 	}
@@ -2853,10 +2889,8 @@ static int sec_ts_pm_suspend(struct device *dev)
 	mutex_unlock(&ts->input_dev->mutex);
 */
 
-	if (ts->lowpower_mode) {
-		ts->power_status = SEC_TS_STATE_LPM_SUSPEND;
+	if (ts->lowpower_mode)
 		reinit_completion(&ts->resume_done);
-	}
 
 	return 0;
 }
@@ -2871,10 +2905,8 @@ static int sec_ts_pm_resume(struct device *dev)
 	mutex_unlock(&ts->input_dev->mutex);
 */
 
-	if (ts->lowpower_mode) {
-		ts->power_status = SEC_TS_STATE_LPM_RESUME;
+	if (ts->lowpower_mode)
 		complete_all(&ts->resume_done);
-	}
 
 	return 0;
 }

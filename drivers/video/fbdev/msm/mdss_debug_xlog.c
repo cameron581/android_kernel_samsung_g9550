@@ -615,8 +615,12 @@ static void mdss_xlog_dump_array(struct mdss_debug_base *blk_arr[],
 
 	if (mdss_samsung_dsi_te_check(vdd)) {
 		pr_err("%s : recovery need..\n", __func__);
+		mdss_fb_report_panel_dead(pstatus_data->mfd);
 		return;
 	}
+
+	mdss_samsung_store_xlog_panic_dbg();
+	mdss_samsung_dump_xlog();
 #endif
 
 	mdss_xlog_dump_all();
@@ -671,12 +675,6 @@ void mdss_xlog_tout_handler_default(bool queue, const char *name, ...)
 	if (queue && work_pending(&mdss_dbg_xlog.xlog_dump_work))
 		return;
 
-#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
-	mdss_dbg_xlog.xlog_enable = 0;
-
-	dump_stack();
-#endif
-
 	blk_arr = &mdss_dbg_xlog.blk_arr[0];
 	blk_len = ARRAY_SIZE(mdss_dbg_xlog.blk_arr);
 
@@ -703,6 +701,13 @@ void mdss_xlog_tout_handler_default(bool queue, const char *name, ...)
 		if (!strcmp(blk_name, "panic"))
 			dead = true;
 	}
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	dump_stack();
+	if (dead == true)
+		mdss_dbg_xlog.xlog_enable = 0;
+#endif
+
 	va_end(args);
 
 	if (queue) {
@@ -753,6 +758,7 @@ static ssize_t mdss_xlog_dump_write(struct file *file,
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 	mdss_samsung_dsi_te_check(vdd);
 	mdss_samsung_dump_regs();
+	mdss_samsung_dump_xlog();
 	mdss_samsung_dsi_dump_regs(vdd, DSI_CTRL_0);
 	mdss_samsung_dsi_dump_regs(vdd, DSI_CTRL_1);
 #endif

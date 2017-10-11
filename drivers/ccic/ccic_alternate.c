@@ -1,6 +1,6 @@
 /*
  * driver/ccic/ccic_alternate.c - S2MM005 USB CCIC Alternate mode driver
- * 
+ *
  * Copyright (C) 2016 Samsung Electronics
  * Author: Wookwang Lee <wookwang.lee@samsung.com>
  *
@@ -105,11 +105,35 @@ void acc_detach_check(struct work_struct *wk)
 		container_of(delay_work, struct s2mm005_data, acc_detach_work);
 
 	pr_info("%s: usbpd_data->pd_state : %d\n", __func__, usbpd_data->pd_state);
-	if (usbpd_data->pd_state == State_PE_Initial_detach) {		
+	if (usbpd_data->pd_state == State_PE_Initial_detach) {
 		if (usbpd_data->acc_type != CCIC_DOCK_DETACHED) {
 			ccic_send_dock_intent(CCIC_DOCK_DETACHED);
 			usbpd_data->acc_type = CCIC_DOCK_DETACHED;
 		}
+	}
+}
+
+void set_enable_powernego(int mode)
+{
+	struct s2mm005_data *usbpd_data;
+	u8 W_DATA[2];
+
+	if (!ccic_device)
+		return;
+	usbpd_data = dev_get_drvdata(ccic_device);
+	if (!usbpd_data)
+		return;
+
+	if(mode) {
+		W_DATA[0] = 0x3;
+		W_DATA[1] = 0x42;
+		s2mm005_write_byte(usbpd_data->i2c, 0x10, &W_DATA[0], 2);
+		pr_info("%s : Power nego start\n", __func__);
+	} else {
+		W_DATA[0] = 0x3;
+		W_DATA[1] = 0x42;
+		s2mm005_write_byte(usbpd_data->i2c, 0x10, &W_DATA[0], 2);
+		pr_info("%s : Power nego stop\n", __func__);
 	}
 }
 
@@ -183,6 +207,7 @@ void set_enable_alternate_mode(int mode)
 			s2mm005_write_byte(usbpd_data->i2c, 0x10, &W_DATA[0], 2);
 			pr_info("%s : alternate mode is reset as start! \n",	__func__);
 			prev_alternate_mode = ALTERNATE_MODE_START;
+			set_enable_powernego(1);
 		} else if (check_is_driver_loaded && (prev_alternate_mode == ALTERNATE_MODE_STOP)) {
 			W_DATA[0] = 0x3;
 			W_DATA[1] = 0x33;
@@ -208,6 +233,7 @@ void set_enable_alternate_mode(int mode)
 				s2mm005_write_byte(usbpd_data->i2c, 0x10, &W_DATA[0], 2);
 				pr_info("%s : alternate mode is started! \n",	__func__);
 				prev_alternate_mode = ALTERNATE_MODE_START;
+				set_enable_powernego(1);
 			} else if(mode & ALTERNATE_MODE_STOP) {
 				W_DATA[0] = 0x3;
 				W_DATA[1] = 0x33;
@@ -331,7 +357,9 @@ int get_diplayport_status(void)
 static int process_check_accessory(void * data)
 {
 	struct s2mm005_data *usbpd_data = data;
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
 	struct otg_notify *o_notify = get_otg_notify();
+#endif
 	uint16_t vid = usbpd_data->Vendor_ID;
 	uint16_t pid = usbpd_data->Product_ID;
 	uint16_t dock_type = 0;
@@ -349,14 +377,19 @@ static int process_check_accessory(void * data)
 			case GEARVR_PRODUCT_ID_5:
 				dock_type = CCIC_DOCK_HMT;
 				pr_info("%s : Samsung Gear VR connected.\n", __func__);
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
 				if (o_notify)
-					o_notify->hw_param[USB_CCIC_VR_USE_COUNT]++;
+					inc_hw_param(o_notify, USB_CCIC_VR_USE_COUNT);
+#endif
 				break;
 			case DEXDOCK_PRODUCT_ID:
 				dock_type = CCIC_DOCK_DEX;
 				pr_info("%s : Samsung DEX connected.\n", __func__);
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
 				if (o_notify)
-					o_notify->hw_param[USB_CCIC_DEX_USE_COUNT]++;
+					inc_hw_param(o_notify, USB_CCIC_VR_USE_COUNT);
+#endif
+
 				break;
 			case HDMI_PRODUCT_ID:
 				dock_type = CCIC_DOCK_HDMI;
@@ -423,7 +456,9 @@ static int process_discover_svids(void * data)
 	uint16_t REG_ADD = REG_RX_DIS_SVID;
 	uint8_t ReadMSG[32] = {0,};
 	int ret = 0;
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)	
 	struct otg_notify *o_notify = get_otg_notify();
+#endif
 	CC_NOTI_TYPEDEF ccic_alt_noti;
 	// Message Type Definition
 	U_VDO1_Type 				  *DATA_MSG_VDO1 = (U_VDO1_Type *)&ReadMSG[8];
@@ -484,14 +519,16 @@ static int process_discover_svids(void * data)
 			return -1;
 		}
 		usbpd_data->dp_is_connect = 1;
+#if defined(CONFIG_USB_HOST_NOTIFY) && defined(CONFIG_USB_HW_PARAM)
+		if (o_notify)			
+			inc_hw_param(o_notify, USB_CCIC_DP_USE_COUNT);
+#endif		
 #endif
 		ccic_event_work(usbpd_data,ccic_alt_noti.dest,ccic_alt_noti.id,
 			ccic_alt_noti.sub1,ccic_alt_noti.sub2,ccic_alt_noti.sub3);
 	}
 
 	dev_info(&i2c->dev, "%s SVID_0 : 0x%X, SVID_1 : 0x%X\n", __func__, usbpd_data->SVID_0, usbpd_data->SVID_1);
-	if (usbpd_data->SVID_0 == DISPLAY_PORT_SVID && o_notify)
-		o_notify->hw_param[USB_CCIC_DP_USE_COUNT]++;
 	return 0;
 }
 
@@ -918,7 +955,7 @@ static void process_alternate_mode(void * data)
 	struct otg_notify *o_notify = get_otg_notify();
 	if (mode) {
 		dev_info(&i2c->dev, "%s, mode : 0x%x\n", __func__, mode);
-		if (is_blocked(o_notify, NOTIFY_BLOCK_TYPE_HOST)) {
+		if (o_notify != NULL && is_blocked(o_notify, NOTIFY_BLOCK_TYPE_HOST)) {
 			dev_info(&i2c->dev, "%s, host is blocked, skip all the alternate mode.\n", __func__);
 			goto process_error;
 		}

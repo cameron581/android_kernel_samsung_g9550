@@ -56,6 +56,9 @@ struct sec_param_data {
 	char param_carrierid[4]; //only use 3digits, 1 for null
 	char param_sales[4]; //only use 3digits, 1 for null
 	char param_lcd_resolution[8]; // Variable LCD resolution
+	char prototype_serial[16];
+	unsigned int api_gpio_test;
+	char api_gpio_test_result[256];
 };
 
 struct sec_param_data_s {
@@ -97,11 +100,14 @@ enum sec_param_index {
 #endif
 #if defined(CONFIG_MUIC_HV) || defined(CONFIG_SUPPORT_QC30)
 	param_index_afc_disable,
-#endif	
+#endif
 	param_index_cp_reserved_mem,
 	param_index_carrierid,
 	param_index_sales,
 	param_index_lcd_resolution,
+	param_index_prototype_serial,
+	param_index_api_gpio_test,
+	param_index_api_gpio_test_result,
 #ifdef CONFIG_SEC_NAD
 	param_index_qnad,
 	param_index_qnad_ddr_result,

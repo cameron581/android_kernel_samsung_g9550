@@ -66,6 +66,9 @@ static struct v4l2_file_operations msm_ois_v4l2_subdev_fops;
 #define CDBG_I(fmt, args...) do { } while (0)
 #endif
 
+#if defined (CONFIG_SEC_DREAMQLTE_PROJECT) ||defined (CONFIG_SEC_DREAM2QLTE_PROJECT) || defined (CONFIG_SEC_CRUISERLTE_PROJECT)
+#define I2C_ADAPTER_LOCK //add i2c lock for avoided i2c conflict with nfc
+#endif
 extern int16_t msm_actuator_move_for_ois_test(void);
 
 static int32_t msm_ois_power_up(struct msm_ois_ctrl_t *a_ctrl);
@@ -77,6 +80,11 @@ static int32_t msm_ois_set_ggfadedown(struct msm_ois_ctrl_t *a_ctrl, uint16_t va
 
 static struct i2c_driver msm_ois_i2c_driver;
 struct msm_ois_ctrl_t *g_msm_ois_t;
+
+#ifdef I2C_ADAPTER_LOCK
+struct i2c_adapter *g_msm_ois_i2c_adapter;
+#endif
+
 extern struct class *camera_class; /*sys/class/camera*/
 
 #define GPIO_LEVEL_LOW        0
@@ -162,44 +170,66 @@ static int msm_ois_init(struct msm_ois_ctrl_t *a_ctrl) {
     if ((rc = msm_ois_wait_idle(a_ctrl, 40)) < 0) {
         pr_err("ois init : wait idle fail\n");
 #if defined(CONFIG_USE_CAMERA_HW_BIG_DATA)
-    if(!msm_is_sec_get_sensor_position(&hw_cam_position)) {
+        if (rc == -EIO) {
+        msm_is_sec_get_sensor_position(&hw_cam_position);
         if (hw_cam_position != NULL) {
-            if (*hw_cam_position == BACK_CAMERA_B) {
-                if (!msm_is_sec_get_rear_hw_param(&hw_param)) {
-                    if (hw_param != NULL) {
-                        pr_err("[HWB_DBG][R][OIS] Err\n");
-                        hw_param->i2c_ois_err_cnt++;
-                        hw_param->need_update_to_file = TRUE;
-                    }
-                }
-            }
-            else if ((*hw_cam_position == FRONT_CAMERA_B) && !msm_is_sec_get_secure_mode(&hw_cam_secure)) {
-                if (hw_cam_secure != NULL) {
-                    if (!(*hw_cam_secure)) {
-                        if (!msm_is_sec_get_front_hw_param(&hw_param)) {
-                            if (hw_param != NULL) {
-                                pr_err("[HWB_DBG][F][OIS] Err\n");
-                                hw_param->i2c_ois_err_cnt++;
-                                hw_param->need_update_to_file = TRUE;
-                            }
+            switch(*hw_cam_position) {
+                case BACK_CAMERA_B:
+                    if (!msm_is_sec_get_rear_hw_param(&hw_param)) {
+                        if (hw_param != NULL) {
+                            pr_err("[HWB_DBG][R][OIS] Err\n");
+                            hw_param->i2c_ois_err_cnt++;
+                            hw_param->need_update_to_file = TRUE;
                         }
                     }
-                    else if ((*hw_cam_secure)) {
-                        if (!msm_is_sec_get_iris_hw_param(&hw_param)) {
-                            if (hw_param != NULL) {
-                                pr_err("[HWB_DBG][I][OIS] Err\n");
-                                hw_param->i2c_ois_err_cnt++;
-                                hw_param->need_update_to_file = TRUE;
-                            }
+                    break;
+
+                case FRONT_CAMERA_B:
+                    msm_is_sec_get_secure_mode(&hw_cam_secure);
+                    if (hw_cam_secure != NULL) {
+                        switch(*hw_cam_secure) {
+                            case FALSE:
+                                if (!msm_is_sec_get_front_hw_param(&hw_param)) {
+                                    if (hw_param != NULL) {
+                                        pr_err("[HWB_DBG][F][OIS] Err\n");
+                                        hw_param->i2c_ois_err_cnt++;
+                                        hw_param->need_update_to_file = TRUE;
+                                    }
+                                }
+                                break;
+
+                            case TRUE:
+                                if (!msm_is_sec_get_iris_hw_param(&hw_param)) {
+                                    if (hw_param != NULL) {
+                                        pr_err("[HWB_DBG][I][OIS] Err\n");
+                                        hw_param->i2c_ois_err_cnt++;
+                                        hw_param->need_update_to_file = TRUE;
+                                    }
+                                }
+                                break;
+
+                            default:
+                                pr_err("[HWB_DBG][I][OIS] Unsupport\n");
+                                break;
                         }
                     }
-                    else {
-                        //Check.
+                    break;
+
+#if defined(CONFIG_SAMSUNG_MULTI_CAMERA)
+                case AUX_CAMERA_B:
+                    if (!msm_is_sec_get_rear2_hw_param(&hw_param)) {
+                        if (hw_param != NULL) {
+                            pr_err("[HWB_DBG][R2][OIS] Err\n");
+                            hw_param->i2c_ois_err_cnt++;
+                            hw_param->need_update_to_file = TRUE;
+                        }
                     }
-                }
-            }
-            else {
-                //Check.
+                    break;
+#endif
+
+                default:
+                    pr_err("[HWB_DBG][NON][OIS] Unsupport\n");
+                    break;
             }
         }
     }
@@ -290,6 +320,10 @@ static int32_t msm_ois_read_phone_ver(struct msm_ois_ctrl_t *a_ctrl)
     set_fs(KERNEL_DS);
 
     ois_core_ver = a_ctrl->cal_info.cal_ver[0];
+    if ((ois_core_ver < 'A') || (ois_core_ver > 'Z')) {
+        ois_core_ver = a_ctrl->module_ver.core_ver;
+        pr_info("OIS cal core version(%c) invalid, use module core version(%c)", a_ctrl->cal_info.cal_ver[0], a_ctrl->module_ver.core_ver);
+    }
 
     switch (ois_core_ver) {
         case 'A':
@@ -312,6 +346,10 @@ static int32_t msm_ois_read_phone_ver(struct msm_ois_ctrl_t *a_ctrl)
         case 'P':
             sprintf(ois_bin_full_path, "%s/%s", OIS_FW_PATH, OIS_FW_SEC_NAME);
             break;
+        default:
+            pr_info("OIS core version invalid %c", ois_core_ver);
+            ret = -1;
+            goto ERROR;
     }
     sprintf(a_ctrl->load_fw_name, ois_bin_full_path); // to use in fw_update
 
@@ -1106,17 +1144,22 @@ error:
 int msm_ois_wait_idle(struct msm_ois_ctrl_t *a_ctrl, int retries) {
     uint16_t status;
 
+    uint32_t ret = 0;
     /* check ois status if it`s idle or not */
     /* OISSTS register(0x0001) 1Byte read */
     /* 0x01 == IDLE State */
     do {
-        a_ctrl->i2c_client.i2c_func_tbl->i2c_read(
+        ret = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(
             &a_ctrl->i2c_client, 0x0001, &status, MSM_CAMERA_I2C_BYTE_DATA);
         if (status == 0x01)
             break;
         if (--retries < 0) {
+            if (ret < 0) {
+                pr_err("[OIS_FW_DBG] failed due to i2c fail");
+                return -EIO;
+            }
             pr_err("[OIS_FW_DBG] ois status is not idle, current status %d \n", status);
-            return -EIO;
+            return -EBUSY;
         }
         usleep_range(10000, 11000);
     } while (status != 0x01);
@@ -1684,6 +1727,10 @@ static int32_t msm_ois_i2c_probe(struct i2c_client *client,
 
     //CDBG("client = %x\n", (unsigned int) client);
     ois_ctrl_t->i2c_client.client = client;
+#ifdef I2C_ADAPTER_LOCK
+    g_msm_ois_i2c_adapter = client->adapter;
+#endif
+
     ois_ctrl_t->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
     /* Set device type as I2C */
     ois_ctrl_t->ois_device_type = MSM_CAMERA_I2C_DEVICE;

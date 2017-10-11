@@ -147,6 +147,11 @@ enum registers1 {
 #define SX9320_AVGTHRESH	"sx9320,avgthresh"
 #define SX9320_DEBOUNCER	"sx9320,debouncer"
 #define SX9320_NORMALTHD	"sx9320,normal_thd"
+#define SX9320_NORMALTHD_TA	"sx9320,normal_thd_ta"
+#define SX9320_AFEPH0		"sx9320,afeph0"
+#define SX9320_AFEPH1		"sx9320,afeph1"
+#define SX9320_AFEPH2		"sx9320,afeph2"
+#define SX9320_AFEPH3		"sx9320,afeph3"
 
 #define SX9320_CS2_GND
 //#define SX9320_CS0_GND
@@ -356,4 +361,4 @@ extern int sensors_register(struct device **dev, void *drvdata,
 extern void sensors_unregister(struct device *dev,
 	struct device_attribute *attributes[]);
 
-#endif /* _SX9320_I2C_REG_H_*/
+#endif /* _SX9320_I2C_REG_H_*/

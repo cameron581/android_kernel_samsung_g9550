@@ -27,7 +27,7 @@
  */
 #define SD_MAX_RETRIES		5
 #define SD_PASSTHROUGH_RETRIES	1
-#define SD_MAX_MEDIUM_TIMEOUTS	2
+#define SD_MAX_MEDIUM_TIMEOUTS	4
 
 /*
  * Size of the initial data buffer for mode and read capacity data

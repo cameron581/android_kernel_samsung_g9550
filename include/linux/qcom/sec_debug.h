@@ -254,6 +254,8 @@ extern void sec_getlog_supply_kloginfo(void *klog_buf);
 
 extern void sec_gaf_supply_rqinfo(unsigned short curr_offset,
 				  unsigned short rq_offset);
+extern int sec_debug_is_secure_dump(void);
+extern int sec_debug_is_rp_enabled(void);
 extern int sec_debug_is_enabled(void);
 extern int sec_debug_is_enabled_for_ssr(void);
 extern int sec_debug_is_modem_seperate_debug_ssr(void);
@@ -565,37 +567,118 @@ typedef enum {
 extern void force_thermal_reset(void);
 extern void force_watchdog_bark(void);
 #endif
-#define SEC_DEBUG_EX_INFO_SIZE	(0x400)
 
 enum extra_info_dbg_type {
 	DBG_0_GLAD_ERR = 0,
-	DBG_1_RESERVED,
-	DBG_2_RESERVED,
+	DBG_1_UFS_ERR,
+	DBG_2_DISPLAY_ERR,
 	DBG_3_RESERVED,
 	DBG_4_RESERVED,
 	DBG_5_RESERVED,
 	DBG_MAX,
 };
 
-struct sec_debug_reset_ex_info {
+#define EXINFO_KERNEL_DEFAULT_SIZE              2048
+#define EXINFO_KERNEL_SPARE_SIZE                1024
+#define EXINFO_RPM_DEFAULT_SIZE			456
+#define EXINFO_TZ_DEFAULT_SIZE                  40
+#define EXINFO_HYP_DEFAULT_SIZE			400
+#define EXINFO_SUBSYS_DEFAULT_SIZE              1024// 456 + 40 + 400 + spare
+
+typedef struct {
+	unsigned int esr;
+	char str[52];
+	u64 var1;
+	u64 var2;
+	u64 pte[6];
+} ex_info_fault_t;
+
+extern ex_info_fault_t ex_info_fault[NR_CPUS];
+
+typedef struct {
+	char dev_name[16];
+	u32 fsr;
+	u32 fsynr;	
+	unsigned long iova;
+	unsigned long far;
+	char mas_name[16];
+	u8 cbndx;
+	phys_addr_t phys_soft;
+	phys_addr_t phys_atos;
+	u32 sid;
+} ex_info_smmu_t;
+
+typedef struct {
+	int reason;
+	char handler_str[24];
+	unsigned int esr;
+	char esr_str[32];
+} ex_info_badmode_t;
+
+typedef struct {
 	u64 ktime;
 	int cpu;
 	char task_name[TASK_COMM_LEN];
 	char bug_buf[64];
 	char panic_buf[64];
-	u64 fault_addr[6];
+	ex_info_smmu_t smmu;
+	ex_info_fault_t fault[NR_CPUS];
+	ex_info_badmode_t badmode;
 	char pc[64];
 	char lr[64];
 	char dbg0[96];
-	char backtrace[592];
-}; // size SEC_DEBUG_EX_INFO_SIZE
+	char ufs_err[16];
+	char display_err[256];
+	u32 lpm_state[1+2+NR_CPUS];
+	u64 lr_val[NR_CPUS];
+	u64 pc_val[NR_CPUS];
+	char backtrace[0];
+} _kern_ex_info_t;
 
-enum debug_reset_header_type {
-	DRH_TYPE_SUMMARY=0,
-	DRH_TYPE_KLOG,
-	DRH_TYPE_CHECK_STORE,
-	DRH_TYPE_MAX,
-};
+typedef union {
+	_kern_ex_info_t info;
+	char ksize[EXINFO_KERNEL_DEFAULT_SIZE + EXINFO_KERNEL_SPARE_SIZE];
+} kern_exinfo_t ;
+
+typedef struct {
+	u64 nsec;
+	u32 arg[4];
+	char msg[50];	
+} __rpm_log_t;
+
+typedef struct {
+		u32 magic;
+		u32 ver;
+		u32 nlog;
+		__rpm_log_t log[5];
+} _rpm_ex_info_t;
+
+typedef union {
+	_rpm_ex_info_t info; 
+	char rsize[EXINFO_RPM_DEFAULT_SIZE];
+} rpm_exinfo_t ;
+
+typedef struct {
+	char msg[EXINFO_TZ_DEFAULT_SIZE];
+} tz_exinfo_t ;
+
+typedef struct {
+	char msg[EXINFO_HYP_DEFAULT_SIZE];
+} hyp_exinfo_t;
+
+#define RPM_EX_INFO_MAGIC 0x584D5052
+
+typedef struct {
+	kern_exinfo_t kern_ex_info;
+	rpm_exinfo_t rpm_ex_info;
+	tz_exinfo_t tz_ex_info;
+	hyp_exinfo_t hyp_ex_info;
+} rst_exinfo_t;
+
+//rst_exinfo_t sec_debug_reset_ex_info;
+
+#define SEC_DEBUG_EX_INFO_SIZE	(sizeof(rst_exinfo_t))		// 3KB
+
 enum debug_reset_header_state {
 	DRH_STATE_INIT=0,
 	DRH_STATE_VALID,
@@ -609,26 +692,111 @@ struct debug_reset_header {
 	uint32_t read_times;
 	uint32_t ap_klog_idx;
 	uint32_t summary_size;
+	uint32_t stored_tzlog;
 };
 
-extern struct sec_debug_reset_ex_info *sec_debug_reset_ex_info;
+extern rst_exinfo_t *sec_debug_reset_ex_info;
 extern int sec_debug_get_cp_crash_log(char *str);
 extern void _sec_debug_store_backtrace(unsigned long where);
 extern void sec_debug_store_bug_string(const char *fmt, ...);
 extern void sec_debug_store_additional_dbg(enum extra_info_dbg_type type, unsigned int value, const char *fmt, ...);
+extern struct debug_reset_header *get_debug_reset_header(void);
 
 static inline void sec_debug_store_pte(unsigned long addr, int idx)
 {
-	if (sec_debug_reset_ex_info) {
-		if(idx == 0)
-			memset(sec_debug_reset_ex_info->fault_addr, 0,
-				sizeof(sec_debug_reset_ex_info->fault_addr));
+	int cpu = smp_processor_id();
+	_kern_ex_info_t *p_ex_info;
 
-		sec_debug_reset_ex_info->fault_addr[idx] = addr;
+	if (sec_debug_reset_ex_info) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		if (p_ex_info->cpu == -1) {
+			if(idx == 0)
+				memset(&p_ex_info->fault[cpu].pte, 0,
+						sizeof(p_ex_info->fault[cpu].pte));
+
+			p_ex_info->fault[cpu].pte[idx] = addr;
+		}
+	}
+}
+
+static inline void sec_debug_save_fault_info(unsigned int esr, const char *str,
+			unsigned long var1, unsigned long var2)
+{
+	int cpu = smp_processor_id();
+	_kern_ex_info_t *p_ex_info;
+
+	if (sec_debug_reset_ex_info) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		if (p_ex_info->cpu == -1) {
+			p_ex_info->fault[cpu].esr = esr;
+			snprintf(p_ex_info->fault[cpu].str,
+				sizeof(p_ex_info->fault[cpu].str),
+				"%s", str);
+			p_ex_info->fault[cpu].var1 = var1;
+			p_ex_info->fault[cpu].var2 = var2;
+		}
+	}
+}
+
+static inline void sec_debug_save_badmode_info(int reason, const char *handler_str,
+			unsigned int esr, const char *esr_str)
+{
+	_kern_ex_info_t *p_ex_info;
+
+	if (sec_debug_reset_ex_info) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		if (p_ex_info->cpu == -1) {
+			p_ex_info->badmode.reason = reason;
+			snprintf(p_ex_info->badmode.handler_str,
+				sizeof(p_ex_info->badmode.handler_str),
+				"%s", handler_str);
+			p_ex_info->badmode.esr = esr;
+			snprintf(p_ex_info->badmode.esr_str,
+				sizeof(p_ex_info->badmode.esr_str),
+				"%s", esr_str);
+		}
+	}
+}
+
+static inline void sec_debug_save_smmu_info(ex_info_smmu_t *smmu_info)
+{
+	_kern_ex_info_t *p_ex_info;
+
+	if (sec_debug_reset_ex_info) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		if (p_ex_info->cpu == -1) {
+			snprintf(p_ex_info->smmu.dev_name,
+				sizeof(p_ex_info->smmu.dev_name),
+				"%s", smmu_info->dev_name);
+			p_ex_info->smmu.fsr = smmu_info->fsr;
+			p_ex_info->smmu.fsynr = smmu_info->fsynr;
+			p_ex_info->smmu.iova = smmu_info->iova;
+			p_ex_info->smmu.far = smmu_info->fsr;
+			snprintf(p_ex_info->smmu.mas_name,
+				sizeof(p_ex_info->smmu.mas_name),
+				"%s", smmu_info->mas_name);
+			p_ex_info->smmu.cbndx= smmu_info->cbndx;
+			p_ex_info->smmu.phys_soft = smmu_info->phys_soft;
+			p_ex_info->smmu.phys_atos = smmu_info->phys_atos;
+			p_ex_info->smmu.sid = smmu_info->sid;
+		}
 	}
 }
 #else // CONFIG_USER_RESET_DEBUG
 static inline void sec_debug_store_pte(unsigned long addr, int idx)
+{
+}
+
+static inline void sec_dbg_save_fault_info(unsigned int esr, const char *str,
+			unsigned long var1, unsigned long var2)
+{
+}
+
+static inline void sec_debug_save_badmode_info(int reason, const char *handler_str,
+			unsigned int esr, const char *esr_str)
+{
+}
+static inline void sec_debug_save_smmu_info(ex_info_smmu_t *smmu_info)
 {
 }
 #endif // CONFIG_USER_RESET_DEBUG

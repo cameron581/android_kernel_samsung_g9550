@@ -45,6 +45,7 @@
 
 #include "muic-internal.h"
 #include "muic_coagent.h"
+#include "muic_ccic.h"
 
 #if defined(CONFIG_USB_EXTERNAL_NOTIFY)
 extern void muic_send_dock_intent(int type);
@@ -114,6 +115,13 @@ static int muic_handle_usb_notification(struct notifier_block *nb,
 		muic_noti_usbconnection_status(1, "USB");
 		break;
 
+	/* receive powerrole and change the BC 1.2 operation */
+	case EXTERNAL_NOTIFY_POWERROLE:
+		pr_info("%s: POWER ROLE(%d)\n", __func__, devicetype);
+		/* devicetype 1 >> BC1.2 off */
+		if (devicetype)
+			muic_set_otg_state(pmuic, CCIC_POWERROLE_STATE);
+		break;
 	default:
 		break;
 	}

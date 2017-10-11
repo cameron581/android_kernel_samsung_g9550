@@ -453,9 +453,11 @@ struct sock {
     /* START_OF_KNOX_VPN */
 	uid_t			knox_uid;
 	pid_t			knox_pid;
-    __be32          inet_src_masq;
+    __be32          sk_udp_daddr;
+    __be32          sk_udp_saddr;
+    __be16          sk_udp_dport;
+    __be16          sk_udp_sport;
     char domain_name[255];
-    __u64   open_time;
     /* END_OF_KNOX_VPN */
 	void			(*sk_state_change)(struct sock *sk);
 	void			(*sk_data_ready)(struct sock *sk);

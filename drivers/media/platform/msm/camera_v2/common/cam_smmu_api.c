@@ -875,6 +875,13 @@ static int cam_smmu_detach_device(int idx)
 {
 	struct cam_context_bank_info *cb = &iommu_cb_set.cb_info[idx];
 
+	if (!list_empty_careful(&iommu_cb_set.cb_info[idx].smmu_buf_list)) {
+		pr_err("Client %s buffer list is not clean!\n",
+			iommu_cb_set.cb_info[idx].name);
+		cam_smmu_print_list(idx);
+		cam_smmu_clean_buffer_list(idx);
+	}
+
 	/* detach the mapping to device */
 	arm_iommu_detach_device(cb->dev);
 	iommu_cb_set.cb_info[idx].state = CAM_SMMU_DETACH;
@@ -883,33 +890,32 @@ static int cam_smmu_detach_device(int idx)
 
 static int cam_smmu_attach_sec_cpp(int idx)
 {
+	int32_t rc = 0;
+
 	/*
 	 * When switching to secure, detach CPP NS, do scm call
 	 * with CPP SID and no need of attach again, because
 	 * all cpp sids are shared in SCM call. so no need of
 	 * attach again.
 	 */
-	int32_t rc = 0;
-#if 1
-	if (cam_smmu_detach_device(idx) < 0) {
-		pr_err("Error: ARM IOMMU detach failed\n");
-		return -ENODEV;
-	}
-
 	if (cam_smmu_send_syscall_cpp_intf(VMID_CP_CAMERA, idx)) {
 		pr_err("error: syscall failed\n");
 		return -EINVAL;
 	}
-#endif
-	pr_info("%s: Attach sec cpp\n",__func__);
-	iommu_cb_set.cb_info[idx].state = CAM_SMMU_ATTACH;
 
 	rc = msm_camera_tz_set_mode(MSM_CAMERA_TZ_MODE_SECURE,
 		MSM_CAMERA_TZ_HW_BLOCK_CPP);
 	if (rc != 0) {
-		pr_err("camera_tz_set_mode fail - attach %d", rc);
-		return rc;
+		pr_err("secure mode TA notification for cpp unsuccessful, rc %d\n",
+			rc);
+		/*
+		 * Although the TA notification failed, the flow should proceed
+		 * without returning an error as at this point cpp had already
+		 * entered the secure mode.
+		 */
 	}
+
+	iommu_cb_set.cb_info[idx].state = CAM_SMMU_ATTACH;
 
 	return 0;
 }
@@ -921,35 +927,32 @@ static int cam_smmu_detach_sec_cpp(int idx)
 	rc = msm_camera_tz_set_mode(MSM_CAMERA_TZ_MODE_NON_SECURE,
 		MSM_CAMERA_TZ_HW_BLOCK_CPP);
 	if (rc != 0) {
-		pr_err("camera_tz_set_mode - detach fail %d", rc);
-		return rc;
+		pr_err("secure mode TA notification for cpp unsuccessful, rc %d\n",
+			rc);
+		/*
+		 * Although the TA notification failed, the flow should proceed
+		 * without returning an error, as at this point cpp is in secure
+		 * mode and should be switched to non-secure regardless
+		 */
 	}
 
-	/*
-	 * When exiting secure, do scm call and
-	 * and attach with CPP SID in NS mode
-	 */
 	iommu_cb_set.cb_info[idx].state = CAM_SMMU_DETACH;
-	pr_info("%s: Detach sec cpp\n",__func__);
 
-#if 1
+	/*
+	 * When exiting secure, do scm call to attach
+	 * with CPP SID in NS mode.
+	 */
 	if (cam_smmu_send_syscall_cpp_intf(VMID_HLOS, idx)) {
 		pr_err("error: syscall failed\n");
 		return -EINVAL;
 	}
-
-	if (iommu_cb_set.cb_info[idx].state != CAM_SMMU_ATTACH) {
-		if (cam_smmu_attach(idx)) {
-			pr_err("error: failed to attach\n");
-			return -EINVAL;
-		}
-	}
-#endif
 	return 0;
 }
 
 static int cam_smmu_attach_sec_vfe_ns_stats(int idx)
 {
+	int32_t rc = 0;
+
 	/*
 	 *When switching to secure, for secure pixel and non-secure stats
 	 *localizing scm/attach of non-secure SID's in attach secure
@@ -966,16 +969,36 @@ static int cam_smmu_attach_sec_vfe_ns_stats(int idx)
 		}
 	}
 
-	msm_camera_tz_set_mode(MSM_CAMERA_TZ_MODE_SECURE,
+	rc = msm_camera_tz_set_mode(MSM_CAMERA_TZ_MODE_SECURE,
 		MSM_CAMERA_TZ_HW_BLOCK_ISP);
+	if (rc != 0) {
+		pr_err("secure mode TA notification for vfe unsuccessful, rc %d\n",
+			rc);
+		/*
+		 * Although the TA notification failed, the flow should proceed
+		 * without returning an error as at this point vfe had already
+		 * entered the secure mode
+		 */
+	}
 
 	return 0;
 }
 
 static int cam_smmu_detach_sec_vfe_ns_stats(int idx)
 {
-	msm_camera_tz_set_mode(MSM_CAMERA_TZ_MODE_NON_SECURE,
+	int32_t rc = 0;
+
+	rc = msm_camera_tz_set_mode(MSM_CAMERA_TZ_MODE_NON_SECURE,
 		MSM_CAMERA_TZ_HW_BLOCK_ISP);
+	if (rc != 0) {
+		pr_err("secure mode TA notification for vfe unsuccessful, rc %d\n",
+			rc);
+		/*
+		 * Although the TA notification failed, the flow should proceed
+		 * without returning an error, as at this point vfe is in secure
+		 * mode and should be switched to non-secure regardless
+		 */
+	}
 
 	/*
 	 *While exiting from secure mode for secure pixel and non-secure stats,
@@ -992,7 +1015,6 @@ static int cam_smmu_detach_sec_vfe_ns_stats(int idx)
 		pr_err("error: syscall failed\n");
 		return -EINVAL;
 	}
-
 	return 0;
 }
 

@@ -1350,8 +1350,6 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 		vsync_period = vspw + vbp + height + dummy_yres + vfp;
 		hsync_period = hspw + hbp + width + dummy_xres + hfp;
 
-		if (ctrl_pdata->timing_db_mode)
-			MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x1e8, 0x1);
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x24,
 			((hspw + hbp + width + dummy_xres) << 16 |
 			(hspw + hbp)));
@@ -1365,8 +1363,6 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x30, (hspw << 16));
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x34, 0);
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x38, (vspw << 16));
-		if (ctrl_pdata->timing_db_mode)
-			MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x1e4, 0x1);
 	} else {		/* command mode */
 		if (mipi->dst_format == DSI_CMD_DST_FORMAT_RGB888)
 			bpp = 3;
@@ -1448,6 +1444,7 @@ int mdss_dsi_bta_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int ret = 0;
 	unsigned long flag;
+	int ignore_underflow = 0;
 
 	if (ctrl_pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -1462,6 +1459,9 @@ int mdss_dsi_bta_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 
 	mutex_lock(&ctrl_pdata->cmd_mutex);
 
+	if (ctrl_pdata->panel_mode == DSI_VIDEO_MODE)
+		ignore_underflow = 1;
+
 	pr_debug("%s: Checking BTA status\n", __func__);
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
@@ -1470,6 +1470,9 @@ int mdss_dsi_bta_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	reinit_completion(&ctrl_pdata->bta_comp);
 	mdss_dsi_enable_irq(ctrl_pdata, DSI_BTA_TERM);
 	spin_unlock_irqrestore(&ctrl_pdata->mdp_lock, flag);
+	/* mask out overflow errors */
+	if (ignore_underflow)
+		mdss_dsi_set_reg(ctrl_pdata, 0x10c, 0x0f0000, 0x0f0000);
 	MIPI_OUTP(ctrl_pdata->ctrl_base + 0x098, 0x01); /* trigger  */
 	wmb();
 
@@ -1478,6 +1481,13 @@ int mdss_dsi_bta_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	if (ret <= 0) {
 		mdss_dsi_disable_irq(ctrl_pdata, DSI_BTA_TERM);
 		pr_err("%s: DSI BTA error: %i\n", __func__, ret);
+	}
+
+	if (ignore_underflow) {
+		/* clear pending overflow status */
+		mdss_dsi_set_reg(ctrl_pdata, 0xc, 0xffffffff, 0x44440000);
+		/* restore overflow isr */
+		mdss_dsi_set_reg(ctrl_pdata, 0x10c, 0x0f0000, 0);
 	}
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
@@ -3036,6 +3046,9 @@ static int dsi_event_thread(void *data)
 		if (todo & DSI_EV_MDP_BUSY_RELEASE) {
 			pr_debug("%s: Handling MDP_BUSY_RELEASE event\n",
 							__func__);
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+			inc_dpui_u32_field(DPUI_KEY_QCT_DSIE, 1);
+#endif
 			spin_lock_irqsave(&ctrl->mdp_lock, flag);
 			ctrl->mdp_busy = false;
 			mdss_dsi_disable_irq_nosync(ctrl, DSI_MDP_TERM);
@@ -3292,6 +3305,9 @@ irqreturn_t mdss_dsi_isr(int irq, void *ptr)
 
 	if (isr & DSI_INTR_ERROR) {
 		MDSS_XLOG(ctrl->ndx, ctrl->mdp_busy, isr, 0x97);
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+		SS_XLOG(0xbad, isr);
+#endif
 		mdss_dsi_error(ctrl);
 	}
 

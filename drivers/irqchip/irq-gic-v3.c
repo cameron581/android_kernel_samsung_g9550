@@ -289,6 +289,9 @@ static int gic_irq_get_irqchip_state(struct irq_data *d,
 }
 static void gic_disable_irq(struct irq_data *d)
 {
+	/* don't lazy-disable PPIs */ 
+	if (gic_irq(d) < 32) 
+	gic_mask_irq(d);
 	if (gic_arch_extn.irq_disable)
 		gic_arch_extn.irq_disable(d);
 }
@@ -422,6 +425,12 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 	u32 enabled;
 	u32 pending[32];
 	void __iomem *base = gic_data_dist_base(gic);
+#ifdef CONFIG_SEC_PM
+	char reason[256] = { 0, };
+	int len = 0;
+	bool ismpm = false, isrpm = false;
+	int irq_cnt = 0;
+#endif
 
 	if (!msm_show_resume_irq_mask)
 		return;
@@ -444,14 +453,43 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 		else if (desc->action && desc->action->name)
 			name = desc->action->name;
 
-		pr_warn("%s: %d triggered %s\n", __func__, irq, name);
+		pr_warn("%s: %d triggered %s(gic%d)\n", __func__, irq, name, i);
 
 #ifdef CONFIG_SEC_PM
-		last_resume_kernel_reason_len += 
-			sprintf(last_resume_kernel_reason + last_resume_kernel_reason_len,
-			"HWIRQ %d(irq %d), %s|", i, irq, name);
+		/* for detecting alarm wakeup by mpm */
+		if (i == 203)	ismpm = true;
+		if (i == 200)	isrpm = true;
+		irq_cnt++;
+
+		/* bypass basic irq and make shorten irq name */
+		if (i == 203)	continue;
+		else if (i == 484)	name = "modem";
+		else if (i == 189)	name = "adsp";
+		else if (i == 211)	name = "dsps";
+		else if (i == 200)	continue;
+
+		len += sprintf(reason + len, "[irq%d,%s]", i, name);
 #endif
 	}
+
+#ifdef CONFIG_SEC_PM
+	/* alarm detected or not */
+	if ((irq_cnt == 2) && ismpm && isrpm) {
+		last_resume_kernel_reason_len +=
+			sprintf(last_resume_kernel_reason +
+				last_resume_kernel_reason_len,
+				"[alarm]");
+	} else {
+		last_resume_kernel_reason_len +=
+			sprintf(last_resume_kernel_reason +
+				last_resume_kernel_reason_len,
+				reason);
+	}
+
+	/* reset value for detecting alarm */
+	isrpm = ismpm = false;
+	irq_cnt = 0;
+#endif
 }
 
 static void gic_resume_one(struct gic_chip_data *gic)

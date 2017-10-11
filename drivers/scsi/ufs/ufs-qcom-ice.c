@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -206,6 +206,7 @@ static void ufs_qcom_ice_cfg_work(struct work_struct *work)
 	 * allow for the request to be retried.
 	 */
 	ufshcd_scsi_unblock_requests(qcom_host->hba);
+
 }
 
 /**
@@ -271,7 +272,10 @@ int ufs_qcom_ice_req_setup(struct ufs_qcom_host *qcom_host,
 
 	if (qcom_host->ice.vops->config_start) {
 		memset(&ice_set, 0, sizeof(ice_set));
-		spin_lock_irqsave(&qcom_host->ice_work_lock, flags);
+
+		spin_lock_irqsave(
+			&qcom_host->ice_work_lock, flags);
+
 		err = qcom_host->ice.vops->config_start(qcom_host->ice.pdev,
 			cmd->request, &ice_set, true);
 		if (err) {
@@ -294,13 +298,20 @@ int ufs_qcom_ice_req_setup(struct ufs_qcom_host *qcom_host,
 					ufshcd_scsi_block_requests(qcom_host->hba);
 					qcom_host->req_pending = cmd->request;
 
-					if (!schedule_work(&qcom_host->ice_cfg_work)) {
+					if (!schedule_work(
+						&qcom_host->ice_cfg_work)) {
 						qcom_host->req_pending = NULL;
-						spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
-						ufshcd_scsi_unblock_requests(qcom_host->hba);
+
+						spin_unlock_irqrestore(
+						&qcom_host->ice_work_lock,
+						flags);
+
+						ufshcd_scsi_unblock_requests(
+							qcom_host->hba);
 						return err;
 					}
 				}
+
 			} else {
 				if (err != -EBUSY)
 					dev_err(qcom_host->hba->dev,
@@ -308,11 +319,14 @@ int ufs_qcom_ice_req_setup(struct ufs_qcom_host *qcom_host,
 						__func__, err);
 			}
 
-			spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
+			spin_unlock_irqrestore(&qcom_host->ice_work_lock,
+				flags);
+
 			return err;
 		}
 
 		spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
+
 		if (ufs_qcom_is_data_cmd(cmd_op, true))
 			*enable = !ice_set.encr_bypass;
 		else if (ufs_qcom_is_data_cmd(cmd_op, false))
@@ -380,7 +394,10 @@ int ufs_qcom_ice_cfg_start(struct ufs_qcom_host *qcom_host,
 
 	if (qcom_host->ice.vops->config_start) {
 		memset(&ice_set, 0, sizeof(ice_set));
-		spin_lock_irqsave(&qcom_host->ice_work_lock, flags);
+
+		spin_lock_irqsave(
+			&qcom_host->ice_work_lock, flags);
+
 		err = qcom_host->ice.vops->config_start(qcom_host->ice.pdev,
 							req, &ice_set, true);
 		if (err) {
@@ -401,15 +418,23 @@ int ufs_qcom_ice_cfg_start(struct ufs_qcom_host *qcom_host,
 					__func__);
 
 				if (!qcom_host->req_pending) {
-					ufshcd_scsi_block_requests(qcom_host->hba);
+					ufshcd_scsi_block_requests(
+						qcom_host->hba);
 					qcom_host->req_pending = cmd->request;
-					if (!schedule_work(&qcom_host->ice_cfg_work)) {
+					if (!schedule_work(
+						&qcom_host->ice_cfg_work)) {
 						qcom_host->req_pending = NULL;
-						spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
-						ufshcd_scsi_unblock_requests(qcom_host->hba);
+
+						spin_unlock_irqrestore(
+						&qcom_host->ice_work_lock,
+						flags);
+
+						ufshcd_scsi_unblock_requests(
+							qcom_host->hba);
 						return err;
 					}
 				}
+
 			} else {
 				if (err != -EBUSY)
 					dev_err(qcom_host->hba->dev,
@@ -417,11 +442,15 @@ int ufs_qcom_ice_cfg_start(struct ufs_qcom_host *qcom_host,
 						__func__, err);
 			}
 
-			spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
+			spin_unlock_irqrestore(
+				&qcom_host->ice_work_lock, flags);
+
 			return err;
 		}
+
+		spin_unlock_irqrestore(
+			&qcom_host->ice_work_lock, flags);
 	}
-	spin_unlock_irqrestore(&qcom_host->ice_work_lock, flags);
 
 	cmd_op = cmd->cmnd[0];
 

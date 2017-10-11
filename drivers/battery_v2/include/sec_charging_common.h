@@ -46,6 +46,7 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_WIRELESS_OP_FREQ,
 	POWER_SUPPLY_EXT_PROP_WIRELESS_TX_CMD,
 	POWER_SUPPLY_EXT_PROP_WIRELESS_TX_VAL,
+	POWER_SUPPLY_EXT_PROP_WIRELESS_TX_ID,
 	POWER_SUPPLY_EXT_PROP_AICL_CURRENT,
 	POWER_SUPPLY_EXT_PROP_CHECK_MULTI_CHARGE,
 	POWER_SUPPLY_EXT_PROP_CHIP_ID,
@@ -56,12 +57,25 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_SBM_DATA,
 #endif
 	POWER_SUPPLY_EXT_PROP_WDT_STATUS,
+	POWER_SUPPLY_EXT_PROP_SUB_PBA_TEMP_REC,
 };
 
 enum sec_battery_usb_conf {
 	USB_CURRENT_UNCONFIGURED = 100,
 	USB_CURRENT_HIGH_SPEED = 500,
 	USB_CURRENT_SUPER_SPEED = 900,
+};
+
+enum sec_battery_rp_curr {
+	RP_CURRENT_RP1 = 500,
+	RP_CURRENT_RP2 = 1500,
+	RP_CURRENT_RP3 = 3000,
+	RP_CURRENT_DEFAULT_IN = 1800,
+#if defined(CONFIG_SEC_FACTORY)	
+	RP_CURRENT_DEFAULT_OUT = 1500,
+#else
+	RP_CURRENT_DEFAULT_OUT = 2100,
+#endif
 };
 
 enum power_supply_ext_health {
@@ -101,7 +115,9 @@ enum sec_battery_cable {
 	SEC_BATTERY_CABLE_WIRELESS_HV_VEHICLE,	/* 28 */
 	SEC_BATTERY_CABLE_PREPARE_WIRELESS_HV,	/* 29 */
 	SEC_BATTERY_CABLE_TIMEOUT,	        /* 30 */
-	SEC_BATTERY_CABLE_MAX,                	/* 31 */
+	SEC_BATTERY_CABLE_SMART_OTG,            /* 31 */
+	SEC_BATTERY_CABLE_SMART_NOTG,           /* 32 */
+	SEC_BATTERY_CABLE_MAX,                	/* 33 */
 };
 
 enum sec_battery_voltage_mode {
@@ -178,7 +194,9 @@ enum sec_wireless_control_mode {
 	WIRELESS_VOUT_5V,
 	WIRELESS_VOUT_9V,
 	WIRELESS_VOUT_10V,
-	WIRELESS_VOUT_9V_OTG,
+	WIRELESS_VOUT_5V_STEP,
+	WIRELESS_VOUT_9V_STEP,
+	WIRELESS_VOUT_10V_STEP,
 	WIRELESS_PAD_FAN_OFF,
 	WIRELESS_PAD_FAN_ON,
 	WIRELESS_PAD_LED_OFF,
@@ -214,6 +232,33 @@ enum sec_wireless_pad_mode {
 	SEC_WIRELESS_PAD_VEHICLE_HV,
 	SEC_WIRELESS_PAD_PREPARE_HV,
 	SEC_WIRELESS_PAD_A4WP,
+};
+
+enum sec_wireless_pad_id {
+	WC_PAD_ID_UNKNOWN	= 0x00,
+	/* 0x01~1F : Single Port */
+	WC_PAD_ID_SNGL_NOBLE = 0x10,
+	WC_PAD_ID_SNGL_VEHICLE,
+	WC_PAD_ID_SNGL_MINI,
+	WC_PAD_ID_SNGL_ZERO,
+	WC_PAD_ID_SNGL_DREAM,
+	/* 0x20~2F : Multi Port */
+	/* 0x30~3F : Stand Type */
+	WC_PAD_ID_STAND_HERO = 0x30,
+	WC_PAD_ID_STAND_DREAM,
+	/* 0x40~4F : External Battery Pack */
+	WC_PAD_ID_EXT_BATT_PACK = 0x40,
+	WC_PAD_ID_EXT_BATT_PACK_TA,
+	/* 0x50~6F : Reserved */
+	WC_PAD_ID_MAX = 0x6F,
+};
+
+enum sec_battery_temp_control_source {
+	TEMP_CONTROL_SOURCE_NONE = 0,
+	TEMP_CONTROL_SOURCE_BAT_THM,
+	TEMP_CONTROL_SOURCE_CHG_THM,
+	TEMP_CONTROL_SOURCE_WPC_THM,
+	TEMP_CONTROL_SOURCE_USB_THM,
 };
 
 /* ADC type */
@@ -630,7 +675,6 @@ struct sec_battery_platform_data {
 	unsigned int swelling_drop_float_voltage;
 	unsigned int swelling_high_rechg_voltage;
 	unsigned int swelling_low_rechg_voltage;
-	unsigned int swelling_low_1st_rechg_voltage;
 	unsigned int swelling_drop_voltage_condition;
 
 #if defined(CONFIG_CALC_TIME_TO_FULL)
@@ -727,16 +771,13 @@ struct sec_battery_platform_data {
 	int chg_high_temp_recovery;
 	unsigned int chg_charging_limit_current;
 	unsigned int chg_input_limit_current;
-	int wpc_high_temp_size;
-	int *wpc_high_temp;
-	int *wpc_high_temp_recovery;
+	unsigned int wpc_temp_control_source;
+	int wpc_high_temp;
+	int wpc_high_temp_recovery;
 	unsigned int wpc_charging_limit_current;
 	int wpc_lcd_on_high_temp;
 	int wpc_lcd_on_high_temp_rec;
-	int *wpc_store_high_temp;
-	int *wpc_store_high_temp_recovery;
-	int wpc_store_lcd_on_high_temp;
-	int wpc_store_lcd_on_high_temp_rec;
+	unsigned int wpc_lcd_on_charging_limit_current;
 	unsigned int sleep_mode_limit_current;
 	unsigned int wc_full_input_limit_current;
 	unsigned int wc_cv_current;
@@ -837,8 +878,11 @@ struct sec_battery_platform_data {
 	int siop_wireless_input_limit_current;
 	int siop_wireless_charging_limit_current;
 	int siop_hv_wireless_input_limit_current;
-	int siop_store_hv_wireless_input_limit_current;
 	int siop_hv_wireless_charging_limit_current;
+	int wc_hero_stand_cc_cv;
+	int wc_hero_stand_cv_current;
+	int wc_hero_stand_hv_cv_current;
+
 	int max_input_voltage;
 	int max_input_current;
 	int pre_afc_work_delay;
@@ -854,6 +898,7 @@ struct sec_battery_platform_data {
 	unsigned int cisd_cap_low_thr;
 	unsigned int cisd_cap_limit;
 	unsigned int max_voltage_thr;
+	unsigned int cisd_alg_index;
 #if defined(CONFIG_QH_ALGORITHM)
 	int cisd_qh_current_high_thr;
 	int cisd_qh_current_low_thr;

@@ -79,12 +79,14 @@
 #define UART_SPS_CONS_PERIPHERAL 0
 #define UART_SPS_PROD_PERIPHERAL 1
 
-#define IPC_MSM_HS_LOG_STATE_PAGES 2
-#define IPC_MSM_HS_LOG_USER_PAGES 2
-#define IPC_MSM_HS_LOG_DATA_PAGES 3
+#define IPC_MSM_HS_LOG_STATE_PAGES 4
+#define IPC_MSM_HS_LOG_USER_PAGES 4
+#define IPC_MSM_HS_LOG_DATA_PAGES 4
 #define UART_DMA_DESC_NR 8
 #define BUF_DUMP_SIZE 32
 #define MAX_LOG_NAME_LEN 20
+
+static int sys_suspend_noirq_cnt;
 
 enum {
 	HS_SERIAL_ID_BT,
@@ -338,6 +340,8 @@ static int msm_hs_ioctl(struct uart_port *uport, unsigned int cmd,
 	if (!msm_uport)
 		return -ENODEV;
 
+	MSM_HS_INFO("%s():start\n", __func__);
+
 	switch (cmd) {
 	case MSM_ENABLE_UART_CLOCK: {
 		ret = msm_hs_request_clock_on(&msm_uport->uport);
@@ -399,7 +403,7 @@ static int msm_hs_clk_bus_vote(struct msm_hs_port *msm_uport)
 			__func__, rc);
 		goto core_unprepare;
 	}
-	//MSM_HS_DBG("%s: Clock ON successful\n", __func__);
+	MSM_HS_INFO("%s():End, Clock ON successful for dev_id= %u\n", __func__, pdev->id);
 	printk(KERN_INFO "(msm_serial_hs, id %u) HS Uart clock on\n", pdev->id);
 	return rc;
 core_unprepare:
@@ -423,7 +427,7 @@ static void msm_hs_clk_bus_unvote(struct msm_hs_port *msm_uport)
 	if (msm_uport->pclk)
 		clk_disable_unprepare(msm_uport->pclk);
 	msm_hs_bus_voting(msm_uport, BUS_RESET);
-	//MSM_HS_DBG("%s: Clock OFF successful\n", __func__);
+	MSM_HS_INFO("%s():End, Clock OFF successful for dev_id=%u\n", __func__, pdev->id);
 	printk(KERN_INFO "(msm_serial_hs, id %u) HS Uart clock off\n", pdev->id);
 }
 
@@ -431,11 +435,12 @@ static void msm_hs_clk_bus_unvote(struct msm_hs_port *msm_uport)
 static void msm_hs_resource_unvote(struct msm_hs_port *msm_uport)
 {
 	struct uart_port *uport = &(msm_uport->uport);
+	struct platform_device *pdev = to_platform_device(uport->dev);
 	int rc = atomic_read(&msm_uport->resource_count);
 
-	MSM_HS_DBG("%s(): power usage count %d", __func__, rc);
+	MSM_HS_INFO("%s():start, power usage count %d for dev_id=%u", __func__, rc, pdev->id);
 	if (rc <= 0) {
-		MSM_HS_WARN("%s(): rc zero, bailing\n", __func__);
+		MSM_HS_INFO("%s():rc zero, bailing, rc=%d, dev_id=%u\n", __func__, rc, pdev->id);
 		WARN_ON(1);
 		return;
 	}
@@ -449,7 +454,11 @@ static void msm_hs_resource_vote(struct msm_hs_port *msm_uport)
 {
 	int ret;
 	struct uart_port *uport = &(msm_uport->uport);
+	struct platform_device *pdev = to_platform_device(uport->dev);
+
 	ret = pm_runtime_get_sync(uport->dev);
+	MSM_HS_INFO("%s():start :%s ret=%d PM state:%d, dev_id=%u",
+		__func__, dev_name(uport->dev), ret, msm_uport->pm_state, pdev->id);
 	if (ret < 0 || msm_uport->pm_state != MSM_HS_PM_ACTIVE) {
 		if(pm_runtime_enabled(uport->dev)) {
 			MSM_HS_WARN("%s:%s runtime callback not invoked ret:%d st:%d",
@@ -458,6 +467,8 @@ static void msm_hs_resource_vote(struct msm_hs_port *msm_uport)
 		}
 		msm_hs_pm_resume(uport->dev);
 	}
+	MSM_HS_INFO("%s():End :%s ret=%d PM state:%d, dev_id=%u",
+		__func__, dev_name(uport->dev), ret, msm_uport->pm_state, pdev->id);
 	atomic_inc(&msm_uport->resource_count);
 }
 
@@ -2344,7 +2355,7 @@ void msm_hs_resource_off(struct msm_hs_port *msm_uport)
 	struct uart_port *uport = &(msm_uport->uport);
 	unsigned int data;
 
-	MSM_HS_DBG("%s(): begin", __func__);
+	MSM_HS_DBG("%s(): begin, OBS=%d", __func__, msm_uport->obs);
 	msm_hs_disable_flow_control(uport, false);
 	if (msm_uport->rx.flush == FLUSH_NONE)
 		msm_hs_disconnect_rx(uport);
@@ -3240,6 +3251,11 @@ static void msm_hs_pm_suspend(struct device *dev)
 
 	if (!msm_uport)
 		goto err_suspend;
+
+	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt,
+		"%s:start, client_count=%d, PM state=%d, noirq_cnt=%d,dev_id=%u\n", __func__,
+						client_count, msm_uport->pm_state, sys_suspend_noirq_cnt, pdev->id);  
+
 	mutex_lock(&msm_uport->mtx);
 
 	client_count = atomic_read(&msm_uport->client_count);
@@ -3259,7 +3275,7 @@ static void msm_hs_pm_suspend(struct device *dev)
 	if (!atomic_read(&msm_uport->client_req_state))
 		enable_wakeup_interrupt(msm_uport);
 	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt,
-		"%s: PM State Suspended client_count %d\n", __func__,
+		"%s:End, PM State Suspended client_count %d\n", __func__,
 								client_count);
 	mutex_unlock(&msm_uport->mtx);
 	return;
@@ -3279,11 +3295,17 @@ static int msm_hs_pm_resume(struct device *dev)
 		dev_err(dev, "%s:Invalid uport\n", __func__);
 		return -ENODEV;
 	}
+	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt,
+		"%s():start, PM state=%d, pdev_id=%u\n", __func__, msm_uport->pm_state, pdev->id);
 
 	mutex_lock(&msm_uport->mtx);
 	client_count = atomic_read(&msm_uport->client_count);
-	if (msm_uport->pm_state == MSM_HS_PM_ACTIVE)
+	if (msm_uport->pm_state == MSM_HS_PM_ACTIVE) {
+		if(pdev->id == HS_SERIAL_ID_BT)
+			sys_suspend_noirq_cnt = 0;
+
 		goto exit_pm_resume;
+	}
 	if (!atomic_read(&msm_uport->client_req_state))
 		disable_wakeup_interrupt(msm_uport);
 	ret = msm_hs_clk_bus_vote(msm_uport);
@@ -3294,6 +3316,10 @@ static int msm_hs_pm_resume(struct device *dev)
 	}
 	obs_manage_irq(msm_uport, true);
 	msm_uport->pm_state = MSM_HS_PM_ACTIVE;
+
+	if (pdev->id == HS_SERIAL_ID_BT)
+		sys_suspend_noirq_cnt = 0;
+ 
 	msm_hs_resource_on(msm_uport);
 
 	/* For OBS, don't use wakeup interrupt, set gpio to active state */
@@ -3306,7 +3332,8 @@ static int msm_hs_pm_resume(struct device *dev)
 	}
 
 	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt,
-		"%s:PM State:Active client_count %d\n", __func__, client_count);
+		"%s():End, PM State:Active, client_count=%d, PM state=%d, noirq_cnt=%d, dev_id=%u\n",
+		__func__, client_count, msm_uport->pm_state, sys_suspend_noirq_cnt, pdev->id);
 exit_pm_resume:
 	mutex_unlock(&msm_uport->mtx);
 	return ret;
@@ -3327,6 +3354,28 @@ static int msm_hs_pm_sys_suspend_noirq(struct device *dev)
 		msm_uport->pm_state == MSM_HS_PM_ACTIVE)
 		msm_hs_pm_suspend(dev);
 
+
+	if(pdev->id == HS_SERIAL_ID_BT && msm_uport->pm_state == MSM_HS_PM_ACTIVE) {
+		clk_cnt = atomic_read(&msm_uport->resource_count);
+		client_count = atomic_read(&msm_uport->client_count);
+
+		if ( !clk_cnt && !client_count && sys_suspend_noirq_cnt >= 5) {
+			MSM_HS_WARN("%s:Sys-Suspend.clk_cnt:%d,clnt_count:%d\n",
+				 __func__, clk_cnt, client_count);
+			msm_hs_pm_suspend(dev);
+
+			mutex_lock(&msm_uport->mtx);
+			msm_uport->pm_state = MSM_HS_PM_SYS_SUSPENDED;
+			mutex_unlock(&msm_uport->mtx);
+
+			/* Sync runtime-pm and system-pm */
+			pm_runtime_disable(dev);
+			pm_runtime_set_suspended(dev);
+			pm_runtime_enable(dev);
+			return ret;
+		}
+	}
+
 	mutex_lock(&msm_uport->mtx);
 
 	/*
@@ -3336,8 +3385,18 @@ static int msm_hs_pm_sys_suspend_noirq(struct device *dev)
 	clk_cnt = atomic_read(&msm_uport->resource_count);
 	client_count = atomic_read(&msm_uport->client_count);
 	if (msm_uport->pm_state == MSM_HS_PM_ACTIVE) {
-		MSM_HS_WARN("%s:Fail Suspend.clk_cnt:%d,clnt_count:%d\n",
-				 __func__, clk_cnt, client_count);
+
+		if (pdev->id == HS_SERIAL_ID_BT && clk_cnt == 0 && client_count == 0)
+			sys_suspend_noirq_cnt++;
+
+		MSM_HS_WARN("%s():Fail Suspend.clk_cnt:%d,clnt_count:%d, noirq_cnt=%d, pdev_id=%u\n",
+			__func__, clk_cnt, client_count, sys_suspend_noirq_cnt, pdev->id);
+
+		if (sys_suspend_noirq_cnt >= 3 && pdev->id == HS_SERIAL_ID_BT) {
+			pr_err("%s(): IPC logging disabled, dev_id=%u \n", __func__, pdev->id);
+			msm_uport->ipc_debug_mask = FATAL_LEV;
+		}
+
 		ret = -EBUSY;
 		goto exit_suspend_noirq;
 	}
@@ -3365,11 +3424,14 @@ static int msm_hs_pm_sys_resume_noirq(struct device *dev)
 	 * when transfer is requested.
 	 */
 
+	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt,
+		"%s():start, PM state=%d, pdev_id=%u\n", __func__, msm_uport->pm_state, pdev->id);
+
 	mutex_lock(&msm_uport->mtx);
 	if (msm_uport->pm_state == MSM_HS_PM_SYS_SUSPENDED)
 		msm_uport->pm_state = MSM_HS_PM_SUSPENDED;
 	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt,
-		"%s:PM State: Suspended\n", __func__);
+		"%s:PM State: Suspended, noirq_cnt=%d\n", __func__, sys_suspend_noirq_cnt);
 	mutex_unlock(&msm_uport->mtx);
 
 	if (!pm_runtime_enabled(dev) && pdev->id == HS_SERIAL_ID_AT &&
@@ -3400,11 +3462,14 @@ static void  msm_serial_hs_rt_init(struct uart_port *uport)
 static int msm_hs_runtime_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
+	struct msm_hs_port *msm_uport = get_matching_hs_port(pdev);
 
 	if (pdev->id == HS_SERIAL_ID_AT)
 		panic("msm_hs_runtime_suspend is called!!");
 
 	printk(KERN_INFO "(msm_serial_hs, id %u) msm_hs_runtime_suspend\n", pdev->id);
+
+	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt, "%s():start, pdev id=%u\n", __func__, pdev->id);
 	msm_hs_pm_suspend(dev);
 	return 0;
 }
@@ -3412,8 +3477,10 @@ static int msm_hs_runtime_suspend(struct device *dev)
 static int msm_hs_runtime_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
+	struct msm_hs_port *msm_uport = get_matching_hs_port(pdev);
 
 	printk(KERN_INFO "(msm_serial_hs, id %u) msm_hs_runtime_resume\n", pdev->id);
+	LOG_USR_MSG(msm_uport->ipc_msm_hs_pwr_ctxt, "%s():start, PM state=%d, pdev id=%u\n", __func__, msm_uport->pm_state, pdev->id);
 	return msm_hs_pm_resume(dev);
 }
 #else
@@ -3521,6 +3588,7 @@ static int msm_hs_probe(struct platform_device *pdev)
 				devm_kfree(&pdev->dev, pdata);
 				return -ENODEV;
 			} else {
+				pr_err("SMP: PM RUNTIME disabled for pdev_id=%d\n", pdev->id);
 				pm_runtime_disable(&pdev->dev);
 			}
 		}
@@ -3618,7 +3686,7 @@ static int msm_hs_probe(struct platform_device *pdev)
 		if (pdev->id == HS_SERIAL_ID_AT)
 			msm_uport->ipc_debug_mask = DBG_LEV;
 		else
-			msm_uport->ipc_debug_mask = INFO_LEV;
+			msm_uport->ipc_debug_mask = DBG_LEV;
 		ret = sysfs_create_file(&pdev->dev.kobj,
 				&dev_attr_debug_mask.attr);
 		if (unlikely(ret))

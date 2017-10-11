@@ -83,6 +83,12 @@
 #include <linux/sec_param.h>
 #endif
 
+#define _TZ_SVC_DUMP 3 
+#define _TZ_OWNER_SIP 2 
+#define _TZ_SYSCALL_CREATE_SMC_ID(o, s, f) ((uint32_t)((((o & 0x3f) << 24) | (s & 0xff) << 8) | (f & 0xff))) 
+#define _TZ_DUMP_SECURITY_ALLOWS_MEM_DUMP_ID _TZ_SYSCALL_CREATE_SMC_ID(_TZ_OWNER_SIP, _TZ_SVC_DUMP, 0x10) 
+#define _TZ_DUMP_SECURITY_ALLOWS_MEM_DUMP_ID_PARAM_ID 0 
+
 enum sec_debug_upload_cause_t {
 	UPLOAD_CAUSE_INIT = 0xCAFEBABE,
 	UPLOAD_CAUSE_KERNEL_PANIC = 0x000000C8,
@@ -99,14 +105,17 @@ enum sec_debug_upload_cause_t {
 	UPLOAD_CAUSE_PERIPHERAL_ERR = 0x000000FF,
 	UPLOAD_CAUSE_NON_SECURE_WDOG_BARK = 0x00000DBA,
 	UPLOAD_CAUSE_NON_SECURE_WDOG_BITE = 0x00000DBE,
-    UPLOAD_CAUSE_POWER_THERMAL_RESET = 0x00000075,
+        UPLOAD_CAUSE_POWER_THERMAL_RESET = 0x00000075,
 	UPLOAD_CAUSE_SECURE_WDOG_BITE = 0x00005DBE,
 	UPLOAD_CAUSE_BUS_HANG = 0x000000B5,
+	UPLOAD_CAUSE_RECOVERY_ERR = 0x00007763,
 #if defined(CONFIG_SEC_NAD)
 	UPLOAD_CAUSE_NAD_SRTEST = 0x00000A3E,
 	UPLOAD_CAUSE_NAD_QMVSDDR = 0x00000A29,
 	UPLOAD_CAUSE_NAD_QMVSCACHE = 0x00000AED,
 	UPLOAD_CAUSE_NAD_PMIC = 0x00000AB8,
+	UPLOAD_CAUSE_NAD_SDCARD = 0x00000A7C,
+	UPLOAD_CAUSE_NAD_CRYPTO = 0x00000ACF,
 	UPLOAD_CAUSE_NAD_FAIL = 0x00000A65,
 #endif
 };
@@ -117,14 +126,17 @@ struct sec_debug_log *secdbg_log;
 struct debug_reset_header *summary_info = NULL;
 char *summary_buf = NULL;
 struct debug_reset_header *klog_info = NULL;
+struct debug_reset_header *tzlog_info = NULL;
 char *klog_read_buf = NULL;
 char *klog_buf = NULL;
+char *tzlog_buf = NULL;
 uint32_t klog_size = 0;
 
 /* enable sec_debug feature */
 static unsigned enable = 1;
 static unsigned enable_user = 1;
 static unsigned reset_reason = 0xFFEEFFEE;
+static int reset_write_cnt = -1;
 uint64_t secdbg_paddr;
 unsigned int secdbg_size;
 #ifdef CONFIG_SEC_SSR_DEBUG_LEVEL_CHK
@@ -137,11 +149,14 @@ static unsigned pm8941_rev = 0;
 static unsigned pm8841_rev = 0;
 #endif
 unsigned int sec_dbg_level;
+static unsigned secure_dump = 0;
+static unsigned rp_enabled = 0;
 
 uint runtime_debug_val;
 module_param_named(enable, enable, uint, 0644);
 module_param_named(enable_user, enable_user, uint, 0644);
 module_param_named(runtime_debug_val, runtime_debug_val, uint, 0644);
+module_param_named(rp_enabled, rp_enabled, uint, 0644);
 #ifdef CONFIG_SEC_SSR_DEBUG_LEVEL_CHK
 module_param_named(enable_cp_debug, enable_cp_debug, uint, 0644);
 #endif
@@ -713,6 +728,12 @@ unsigned sec_debug_get_reset_reason(void)
 }
 EXPORT_SYMBOL(sec_debug_get_reset_reason);
 
+int sec_debug_get_reset_write_cnt(void)
+{
+	return reset_write_cnt;
+}
+EXPORT_SYMBOL(sec_debug_get_reset_write_cnt);
+
 #ifdef CONFIG_USER_RESET_DEBUG
 extern void sec_debug_backtrace(void);
 
@@ -720,18 +741,21 @@ void _sec_debug_store_backtrace(unsigned long where)
 {
 	static int offset = 0;
 	unsigned int max_size = 0;
+	_kern_ex_info_t *p_ex_info;
 
 	if (sec_debug_reset_ex_info) {
-		max_size = sizeof(sec_debug_reset_ex_info->backtrace);
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		max_size = (unsigned long long int)&sec_debug_reset_ex_info->rpm_ex_info.info
+			- (unsigned long long int)p_ex_info->backtrace;
 
 		if (max_size <= offset)
 			return;
 
 		if (offset)
-			offset += snprintf(sec_debug_reset_ex_info->backtrace+offset,
+			offset += snprintf(p_ex_info->backtrace+offset,
 					 max_size-offset, " > ");
 
-		offset += snprintf(sec_debug_reset_ex_info->backtrace+offset, max_size-offset,
+		offset += snprintf(p_ex_info->backtrace+offset, max_size-offset,
 					"%pS", (void *)where);
 	}
 }
@@ -783,6 +807,10 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_DSPS_RST_ERR);
 	else if (!strnicmp(buf, "subsys", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_PERIPHERAL_ERR);
+	else if (!strnicmp(buf, "recovery", len)){
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_RECOVERY_ERR);
+		sec_debug_hw_reset();
+	}
 #if defined(CONFIG_SEC_NAD)
 	else if (!strnicmp(buf, "nad_srtest", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_SRTEST);
@@ -792,8 +820,12 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_QMVSCACHE);
 	else if (!strnicmp(buf, "nad_pmic", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_PMIC);
+	else if (!strnicmp(buf, "nad_sdcard", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_SDCARD);
 	else if (!strnicmp(buf, "nad_fail", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_FAIL);
+	else if (!strnicmp(buf, "nad_crypto", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_CRYPTO);
 #endif
 	else
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_KERNEL_PANIC);
@@ -834,6 +866,42 @@ void sec_debug_prepare_for_wdog_bark_reset(void)
 #if defined(CONFIG_TOUCHSCREEN_DUMP_MODE)
 struct tsp_dump_callbacks dump_callbacks;
 #endif
+
+#define PWRKEY_CRASH_TIMEOUT 6000
+static struct timer_list pwrkey_crash_timer;
+
+void long_press_pwrkey_timer_init(void)
+{
+	init_timer(&pwrkey_crash_timer);
+}
+
+static void long_press_trigger_force_crash(unsigned long data)
+{
+	pr_err( "Force Trigger by S/W before long press over 6 sec : %s\n", __func__);
+	emerg_pet_watchdog();
+	dump_all_task_info();
+	dump_cpu_stat();
+	panic("Crash Key");
+}
+
+static void long_press_pwrkey_timer_set(void)
+{
+	del_timer(&pwrkey_crash_timer);
+	pwrkey_crash_timer.data = 0;
+	pwrkey_crash_timer.function = long_press_trigger_force_crash;
+	pwrkey_crash_timer.expires = jiffies + msecs_to_jiffies(PWRKEY_CRASH_TIMEOUT);
+	add_timer(&pwrkey_crash_timer);
+}
+
+static int long_press_pwrkey_timer_pending(void)
+{
+	return timer_pending(&pwrkey_crash_timer);
+}
+
+void long_press_pwrkey_timer_clear(void)
+{
+	del_timer(&pwrkey_crash_timer);
+}
 
 void sec_debug_check_crash_key(unsigned int code, int value)
 {
@@ -893,22 +961,33 @@ void sec_debug_check_crash_key(unsigned int code, int value)
 
 	switch (state) {
 	case NONE:
-		if (code == KEY_VOLUMEDOWN && value)
+		if (code == KEY_VOLUMEDOWN && value) {
 			state = STEP1;
-		else
+		} else {
 			state = NONE;
+		}
+		if(long_press_pwrkey_timer_pending())
+			long_press_pwrkey_timer_clear();
 		break;
 	case STEP1:
-		if (code == KEY_POWER && value)
+		if (code == KEY_POWER && value) {
 			state = STEP2;
-		else
+			if(!long_press_pwrkey_timer_pending())
+				long_press_pwrkey_timer_set();
+		} else {
 			state = NONE;
+			if(long_press_pwrkey_timer_pending())
+				long_press_pwrkey_timer_clear();
+		}
 		break;
 	case STEP2:
-		if (code == KEY_POWER && !value)
+		if (code == KEY_POWER && !value) {
 			state = STEP3;
-		else
+		} else {
 			state = NONE;
+		}
+		if(long_press_pwrkey_timer_pending())
+			long_press_pwrkey_timer_clear();
 		break;
 	case STEP3:
 		if (code == KEY_POWER && value) {
@@ -1120,24 +1199,34 @@ static void reset_reason_update_and_clear(void)
 	pr_info("%s : done\n", __func__);
 	rr_data = sec_debug_get_reset_reason();
 
-	if (rr_data == USER_UPLOAD_CAUSE_SMPL)
+	if (rr_data == USER_UPLOAD_CAUSE_SMPL) {
 		p_health->daily_rr.sp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_WTSR)
+		p_health->rr.sp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_WTSR) {
 		p_health->daily_rr.wp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_WATCHDOG)
+		p_health->rr.wp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_WATCHDOG) {
 		p_health->daily_rr.dp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_PANIC)
+		p_health->rr.dp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_PANIC) {
 		p_health->daily_rr.kp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_MANUAL_RESET)
+		p_health->rr.kp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_MANUAL_RESET) {
 		p_health->daily_rr.mp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_POWER_RESET)
+		p_health->rr.mp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_POWER_RESET) {
 		p_health->daily_rr.pp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_REBOOT)
+		p_health->rr.pp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_REBOOT) {
 		p_health->daily_rr.rp++;
-	else if (rr_data == USER_UPLOAD_CAUSE_THERMAL)
+		p_health->rr.rp++;
+	} else if (rr_data == USER_UPLOAD_CAUSE_THERMAL) {
 		p_health->daily_rr.tp++;
-	else
+		p_health->rr.tp++;
+	} else {
 		p_health->daily_rr.np++;
+		p_health->rr.np++;
+	}
 
 	p_health->last_rst_reason = 0;
 	ap_health_data_write(p_health);
@@ -1171,120 +1260,19 @@ static const struct file_operations sec_reset_reason_proc_fops = {
 
 static phys_addr_t sec_debug_reset_ex_info_paddr;
 static unsigned sec_debug_reset_ex_info_size;
-struct sec_debug_reset_ex_info *sec_debug_reset_ex_info;
-
-static int set_reset_extra_info_proc_show(struct seq_file *m, void *v)
-{
-	char buf[SEC_DEBUG_EX_INFO_SIZE] = {0,};
-	int offset = 0;
-	char sub_buf[(SEC_DEBUG_EX_INFO_SIZE>>1)] = {0,};
-	int sub_offset = 0;
-	unsigned long rem_nsec;
-	u64 ts_nsec;
-	struct sec_debug_reset_ex_info *info = NULL;
-
-	if (sec_debug_get_reset_reason() == USER_UPLOAD_CAUSE_PANIC) {
-
-	/* store panic extra info
-		"KTIME":""	: kernel time
-		"FAULT":""	: pgd,va,*pgd,*pud,*pmd,*pte
-		"BUG":""	: bug msg
-		"PANIC":""	: panic buffer msg
-		"PC":""		: pc val
-		"LR":""		: link register val
-		"STACK":""	: backtrace
-		"CHIPID":""	: CPU Serial Number
-		"DBG0":""	: Debugging Option 0
-		"DBG1":""	: Debugging Option 1
-		"DBG2":""	: Debugging Option 2
-		"DBG3":""	: Debugging Option 3
-		"DBG4":""	: Debugging Option 4
-		"DBG5":""	: Debugging Option 5
-	 */
-
-		info = kmalloc(sizeof(struct sec_debug_reset_ex_info), GFP_KERNEL);
-		if (!info) {
-			pr_err("%s : fail - kmalloc\n", __func__);
-			goto out;
-		}
-
-		if (!read_debug_partition(debug_index_reset_ex_info, info)) {
-			pr_err("%s : fail - get param!!\n", __func__);
-			goto out;
-		}
-
-		ts_nsec = info->ktime;
-		rem_nsec = do_div(ts_nsec, 1000000000);
-
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"KTIME\":\"%lu.%06lu\",\n", (unsigned long)ts_nsec, rem_nsec / 1000);
-		
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"FAULT\":\"pgd=%016llx,VA=%016llx,*pgd=%016llx,*pud=%016llx,*pmd=%016llx,*pte=%016llx\",\n",
-			info->fault_addr[0],info->fault_addr[1],info->fault_addr[2],
-			info->fault_addr[3],info->fault_addr[4],info->fault_addr[5]);
-
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"BUG\":\"%s\",\n", info->bug_buf);
-		
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"PANIC\":\"%s\",\n", info->panic_buf);
-
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"PC\":\"%s\",\n", info->pc);
-
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-			"\"LR\":\"%s\",\n", info->lr);
-
-		offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-				"\"STACK\":\"%s\",\n", info->backtrace);
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"CHIPID\":\"\",\n");
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG0\":\"Gladiator ERROR:%s\",\n", info->dbg0);
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG1\":\"%s\",\n", "");
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG2\":\"%s\",\n", "");
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG3\":\"%s\",\n", "");
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG4\":\"%s\",\n", "");
-
-		sub_offset += snprintf((char *)sub_buf + sub_offset, (SEC_DEBUG_EX_INFO_SIZE>>1) - sub_offset,
-				"\"DBG5\":\"%s\"\n", "");
-
-		if (SEC_DEBUG_EX_INFO_SIZE - offset >= sub_offset) {
-			offset += snprintf((char *)buf + offset, SEC_DEBUG_EX_INFO_SIZE - offset,
-					"%s\n", sub_buf);
-		} else {
-			/* const 3 is ",\n size */
-			offset += snprintf((char *)buf + (SEC_DEBUG_EX_INFO_SIZE - sub_offset - 3), sub_offset + 3,
-					"\",\n%s\n", sub_buf);
-		}
-	}
-out:
-	if (info)
-		kfree(info);
-
-	seq_printf(m, buf);
-	return 0;
-}
+rst_exinfo_t *sec_debug_reset_ex_info;
+ex_info_fault_t ex_info_fault[NR_CPUS];
 
 void sec_debug_store_bug_string(const char *fmt, ...)
 {
 	va_list args;
+	_kern_ex_info_t *p_ex_info;
 
 	if (sec_debug_reset_ex_info) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
 		va_start(args, fmt);
-		vsnprintf(sec_debug_reset_ex_info->bug_buf,
-			sizeof(sec_debug_reset_ex_info->bug_buf), fmt, args);
+		vsnprintf(p_ex_info->bug_buf,
+			sizeof(p_ex_info->bug_buf), fmt, args);
 		va_end(args);
 	}
 }
@@ -1293,16 +1281,30 @@ EXPORT_SYMBOL(sec_debug_store_bug_string);
 void sec_debug_store_additional_dbg(enum extra_info_dbg_type type, unsigned int value, const char *fmt, ...)
 {
 	va_list args;
+	_kern_ex_info_t *p_ex_info;
 
 	if (sec_debug_reset_ex_info) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
 		switch (type) {
 			case DBG_0_GLAD_ERR:
 				va_start(args, fmt);
-				vsnprintf(sec_debug_reset_ex_info->dbg0,
-						sizeof(sec_debug_reset_ex_info->dbg0), fmt, args);
+				vsnprintf(p_ex_info->dbg0,
+						sizeof(p_ex_info->dbg0), fmt, args);
 				va_end(args);
 				break;
-			case DBG_1_RESERVED ... DBG_5_RESERVED:
+			case DBG_1_UFS_ERR:
+				va_start(args, fmt);
+				vsnprintf(p_ex_info->ufs_err,
+						sizeof(p_ex_info->ufs_err), fmt, args);
+				va_end(args);
+				break;
+			case DBG_2_DISPLAY_ERR:
+				va_start(args, fmt);
+				vsnprintf(p_ex_info->display_err,
+						sizeof(p_ex_info->display_err), fmt, args);
+				va_end(args);
+				break;
+			case DBG_3_RESERVED ... DBG_5_RESERVED:
 				break;
 			default:
 				break;
@@ -1313,30 +1315,24 @@ EXPORT_SYMBOL(sec_debug_store_additional_dbg);
 
 static void sec_debug_init_panic_extra_info(void)
 {
+	_kern_ex_info_t *p_ex_info;
+
 	if (sec_debug_reset_ex_info) {
-		memset((void *)sec_debug_reset_ex_info, 0, sizeof(*sec_debug_reset_ex_info));
-		sec_debug_reset_ex_info->cpu = -1;
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		memset((void *)&sec_debug_reset_ex_info->kern_ex_info, 0,
+			sizeof(sec_debug_reset_ex_info->kern_ex_info));
+		p_ex_info->cpu = -1;
+		pr_info("%s: ex_info memory initialized size[%ld]\n",
+			__func__, sizeof(kern_exinfo_t));
 	}
 }
-
-static int sec_reset_extra_info_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, set_reset_extra_info_proc_show, NULL);
-}
-
-static const struct file_operations sec_reset_extra_info_proc_fops = {
-	.open = sec_reset_extra_info_proc_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
 
 static int __init sec_debug_ex_info_setup(char *str)
 {
 	unsigned size = memparse(str, &str);
 	int ret;
 
-	if (size && (size == roundup_pow_of_two(size)) && (*str == '@')) {
+	if (size && (*str == '@')) {
 		unsigned long long base = 0;
 
 		ret = kstrtoull(++str, 0, &base);
@@ -1367,106 +1363,43 @@ static int __init sec_debug_get_extra_info_region(void)
 	return 0;
 }
 
-static int get_debug_reset_header(enum debug_reset_header_type type)
+struct debug_reset_header *get_debug_reset_header(void)
 {
-	int ret = 0;
+	struct debug_reset_header *header = NULL;
 	static int get_state = DRH_STATE_INIT;
 
 	if (get_state == DRH_STATE_INVALID)
-		return -EINVAL;
+		return NULL;
 
-	if (type == DRH_TYPE_SUMMARY) {
-		if (summary_info != NULL) {
-			pr_err("%s : already memory alloc for summary_info\n", __func__);
-			return -EINVAL;
-		}
-
-		summary_info = kmalloc(sizeof(struct debug_reset_header), GFP_KERNEL);
-		if (!summary_info) {
-			pr_err("%s : fail - kmalloc for summary_info\n", __func__);
-			return -ENOMEM;
-		}
-		if (!read_debug_partition(debug_index_reset_summary_info, summary_info)) {
-			pr_err("%s : fail - get param!! summary_info\n", __func__);
-			kfree(summary_info);
-			summary_info = NULL;
-			return -ENOENT;
-		}
-
-		if (get_state != DRH_STATE_VALID) {
-			if (summary_info->write_times == summary_info->read_times) {
-				pr_err("%s : untrustworthy summary_info\n", __func__);
-				get_state = DRH_STATE_INVALID;
-				kfree(summary_info);
-				summary_info = NULL;
-				return -EINVAL;
-			} else {
-				get_state = DRH_STATE_VALID;
-			}
-		}
-	} else if (type == DRH_TYPE_KLOG) {
-		if (klog_info != NULL) {
-			pr_err("%s : already memory alloc for klog_info\n", __func__);
-			return -EINVAL;
-		}
-
-		klog_info = kmalloc(sizeof(struct debug_reset_header), GFP_KERNEL);
-		if (!klog_info) {
-			pr_err("%s : fail - kmalloc for klog_info\n", __func__);
-			return -ENOMEM;
-		}
-		if (!read_debug_partition(debug_index_reset_klog_info, klog_info)) {
-			pr_err("%s : fail - get param!! klog_info\n", __func__);
-			kfree(klog_info);
-			klog_info = NULL;
-			return -ENOENT;
-		}
-
-		if (get_state != DRH_STATE_VALID) {
-			if (klog_info->write_times == klog_info->read_times) {
-				pr_err("%s : untrustworthy klog_info\n", __func__);
-				get_state = DRH_STATE_INVALID;
-				kfree(klog_info);
-				klog_info = NULL;
-				return -EINVAL;
-			} else {
-				get_state = DRH_STATE_VALID;
-			}
-		}
-	} else if (type == DRH_TYPE_CHECK_STORE) {
-		struct debug_reset_header *check_store = NULL;
-
-		check_store = kmalloc(sizeof(struct debug_reset_header), GFP_KERNEL);
-		if (!check_store) {
-			pr_err("%s : fail - kmalloc for check_store\n", __func__);
-			return -ENOMEM;
-		}
-		if (!read_debug_partition(debug_index_reset_klog_info, check_store)) {
-			pr_err("%s : fail - get param!! check_store\n", __func__);
-			kfree(check_store);
-			check_store = NULL;
-			return -ENOENT;
-		}
-
-		if (get_state != DRH_STATE_VALID) {
-			if (check_store->write_times == check_store->read_times) {
-				pr_err("%s : untrustworthy check_store\n", __func__);
-				get_state = DRH_STATE_INVALID;
-				kfree(check_store);
-				check_store = NULL;
-				return -EINVAL;
-			} else {
-				get_state = DRH_STATE_VALID;
-			}
-		}
-		kfree(check_store);
-		check_store = NULL;
+	header = kmalloc(sizeof(struct debug_reset_header), GFP_KERNEL);
+	if (!header) {
+		pr_err("%s : fail - kmalloc for debug_reset_header\n", __func__);
+		return NULL;
+	}
+	if (!read_debug_partition(debug_index_reset_summary_info, header)) {
+		pr_err("%s : fail - get param!! debug_reset_header\n", __func__);
+		kfree(header);
+		header = NULL;
+		return NULL;
 	}
 
-	return ret;
+	if (get_state != DRH_STATE_VALID) {
+		if (header->write_times == header->read_times) {
+			pr_err("%s : untrustworthy debug_reset_header\n", __func__);
+			get_state = DRH_STATE_INVALID;
+			kfree(header);
+			header = NULL;
+			return NULL;
+		} else {
+			reset_write_cnt = header->write_times;
+			get_state = DRH_STATE_VALID;
+		}
+	}
+
+	return header;
 }
 
-static int set_debug_reset_header(enum debug_reset_header_type type)
+static int set_debug_reset_header(struct debug_reset_header *header)
 {
 	int ret = 0;
 	static int set_state = DRH_STATE_INIT;
@@ -1476,41 +1409,21 @@ static int set_debug_reset_header(enum debug_reset_header_type type)
 		return ret;
 	}
 
-	if (type == DRH_TYPE_SUMMARY) {
-		if ((summary_info->write_times - 1) == summary_info->read_times) {
-			pr_info("%s : summary_info working well\n", __func__);
-			summary_info->read_times++;
-		} else {
-			pr_info("%s : summary_info read[%d] and write[%d] work sync error.\n",
-					__func__, summary_info->read_times, summary_info->write_times);
-			summary_info->read_times = summary_info->write_times;
-		}
-
-		if (!write_debug_partition(debug_index_reset_summary_info, summary_info)) {
-			pr_err("%s : fail - set param!! summary_info\n", __func__);
-			ret = -ENOENT;
-		} else {
-			set_state = DRH_STATE_VALID;
-		}
-	} else if (type == DRH_TYPE_KLOG) {
-		if ((klog_info->write_times - 1) == klog_info->read_times) {
-			pr_info("%s : klog_info working well\n", __func__);
-			klog_info->read_times++;
-		} else {
-			pr_info("%s : klog_info read[%d] and write[%d] work sync error.\n",
-					__func__, klog_info->read_times, klog_info->write_times);
-			klog_info->read_times = klog_info->write_times;
-		}
-
-		if (!write_debug_partition(debug_index_reset_klog_info, klog_info)) {
-			pr_err("%s : fail - set param!! klog_info\n", __func__);
-			ret = -ENOENT;
-		} else {
-			set_state = DRH_STATE_VALID;
-		}
-
+	if ((header->write_times - 1) == header->read_times) {
+		pr_info("%s : debug_reset_header working well\n", __func__);
+		header->read_times++;
+	} else {
+		pr_info("%s : debug_reset_header read[%d] and write[%d] work sync error.\n",
+				__func__, header->read_times, header->write_times);
+		header->read_times = header->write_times;
 	}
 
+	if (!write_debug_partition(debug_index_reset_summary_info, header)) {
+		pr_err("%s : fail - set param!! debug_reset_header\n", __func__);
+		ret = -ENOENT;
+	} else {
+		set_state = DRH_STATE_VALID;
+	}
 
 	return ret;
 }
@@ -1522,18 +1435,26 @@ static int sec_reset_summary_info_init(void)
 	if (summary_buf != NULL)
 		return true;
 
-	if (get_debug_reset_header(DRH_TYPE_SUMMARY) < 0)
+	if (summary_info != NULL) {
+		pr_err("%s : already memory alloc for summary_info\n", __func__);
+		return -EINVAL;
+	}
+
+	summary_info = get_debug_reset_header();
+	if (summary_info == NULL)
 		return -EINVAL;
 
 	if (summary_info->summary_size > SEC_DEBUG_RESET_SUMMARY_SIZE) {
 		pr_err("%s : summary_size has problem.\n", __func__);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto error_summary_info;
 	}
 
 	summary_buf = vmalloc(SEC_DEBUG_RESET_SUMMARY_SIZE);
 	if (!summary_buf) {
 		pr_err("%s : fail - kmalloc for summary_buf\n", __func__);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto error_summary_info;
 	}
 	if (!read_debug_partition(debug_index_reset_summary, summary_buf)) {
 		pr_err("%s : fail - get param!! summary data\n", __func__);
@@ -1548,6 +1469,8 @@ static int sec_reset_summary_info_init(void)
 
 error_summary_buf:
 	vfree(summary_buf);
+error_summary_info:
+	kfree(summary_info);
 
 	return ret;
 }
@@ -1556,7 +1479,7 @@ static int sec_reset_summary_completed(void)
 {
 	int ret = 0;
 
-	ret = set_debug_reset_header(DRH_TYPE_SUMMARY);
+	ret = set_debug_reset_header(summary_info);
 
 	vfree(summary_buf);
 	kfree(summary_info);
@@ -1576,10 +1499,7 @@ static ssize_t sec_reset_summary_info_proc_read(struct file *file, char __user *
 	if (sec_reset_summary_info_init() < 0)
 		return -ENOENT;
 
-	if (pos >= SEC_DEBUG_RESET_SUMMARY_SIZE)
-		return -ENOENT;
-
-	if (pos >= summary_info->summary_size) {
+	if ((pos >= summary_info->summary_size) || (pos >= SEC_DEBUG_RESET_SUMMARY_SIZE)) {
 		pr_info("%s : pos %lld, size %d\n", __func__, pos, summary_info->summary_size);
 		sec_reset_summary_completed();
 		return 0;
@@ -1605,18 +1525,25 @@ static int sec_reset_klog_init(void)
 	if ((klog_read_buf != NULL) && (klog_buf != NULL))
 		return true;
 
-	if (get_debug_reset_header(DRH_TYPE_KLOG) < 0)
+	if (klog_info != NULL) {
+		pr_err("%s : already memory alloc for klog_info\n", __func__);
+		return -EINVAL;
+	}
+
+	klog_info = get_debug_reset_header();
+	if (klog_info == NULL)
 		return -EINVAL;
 
 	klog_read_buf = vmalloc(SEC_DEBUG_RESET_KLOG_SIZE);
 	if (!klog_read_buf) {
 		pr_err("%s : fail - vmalloc for klog_read_buf\n", __func__);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto error_klog_info;
 	}
 	if (!read_debug_partition(debug_index_reset_klog, klog_read_buf)) {
 		pr_err("%s : fail - get param!! summary data\n", __func__);
 		ret = -ENOENT;
-		goto error_klog_buf;
+		goto error_klog_read_buf;
 	}
 
 	pr_info("%s : idx[%d]\n", __func__, klog_info->ap_klog_idx);
@@ -1625,28 +1552,30 @@ static int sec_reset_klog_init(void)
 	    
 	klog_buf = vmalloc(klog_size);
 	if (!klog_buf) {
-		pr_err("%s : fail - vmalloc for klog_read_buf\n", __func__);
+		pr_err("%s : fail - vmalloc for klog_buf\n", __func__);
 		ret = -ENOMEM;
-		goto error_klog_buf;
+		goto error_klog_read_buf;
 	}
 	
 	if (klog_size && klog_buf && klog_read_buf) {
 		unsigned int i;
 		for (i = 0; i < klog_size; i++)
-			klog_buf[i] = klog_read_buf[(klog_info->ap_klog_idx - klog_size + i) & (SEC_DEBUG_RESET_KLOG_SIZE - 1)];
+			klog_buf[i] = klog_read_buf[(klog_info->ap_klog_idx - klog_size + i) % SEC_DEBUG_RESET_KLOG_SIZE];
 	}
 
 	return ret;
 
-error_klog_buf:
-	vfree(klog_buf);
+error_klog_read_buf:
+	vfree(klog_read_buf);
+error_klog_info:
+	kfree(klog_info);
 
 	return ret;
 }
 
 static void sec_reset_klog_completed(void)
 {
-	set_debug_reset_header(DRH_TYPE_KLOG);
+	set_debug_reset_header(klog_info);
 
 	vfree(klog_buf);
 	vfree(klog_read_buf);
@@ -1688,12 +1617,111 @@ static const struct file_operations sec_reset_klog_proc_fops = {
 	.read = sec_reset_klog_proc_read,
 };
 
+static int sec_reset_tzlog_init(void)
+{
+	int ret = 0;
+
+	if (tzlog_buf != NULL)
+		return true;
+
+	if (tzlog_info != NULL) {
+		pr_err("%s : already memory alloc for tzlog_info\n", __func__);
+		return -EINVAL;
+	}
+
+	tzlog_info = get_debug_reset_header();
+	if (tzlog_info == NULL)
+		return -EINVAL;
+
+	if (tzlog_info->stored_tzlog == 0) {
+		pr_err("%s : The target didn't run SDI operation\n", __func__);
+		ret = -EINVAL;
+		goto error_tzlog_info;
+	}
+
+	tzlog_buf = vmalloc(SEC_DEBUG_RESET_TZLOG_SIZE);
+	if (!tzlog_buf) {
+		pr_err("%s : fail - vmalloc for tzlog_read_buf\n", __func__);
+		ret = -ENOMEM;
+		goto error_tzlog_info;
+	}
+	if (!read_debug_partition(debug_index_reset_tzlog, tzlog_buf)) {
+		pr_err("%s : fail - get param!! tzlog data\n", __func__);
+		ret = -ENOENT;
+		goto error_tzlog_buf;
+	}
+
+	return ret;
+
+error_tzlog_buf:
+	vfree(tzlog_buf);
+error_tzlog_info:
+	kfree(tzlog_info);
+
+	return ret;
+}
+
+static void sec_reset_tzlog_completed(void)
+{
+	set_debug_reset_header(tzlog_info);
+
+	vfree(tzlog_buf);
+	kfree(tzlog_info);
+
+	tzlog_info = NULL;
+	tzlog_buf = NULL;
+
+	pr_info("%s finish\n", __func__);
+}
+
+static ssize_t sec_reset_tzlog_proc_read(struct file *file, char __user *buf,
+		size_t len, loff_t *offset)
+{
+	loff_t pos = *offset;
+	ssize_t count;
+
+	if (sec_reset_tzlog_init() < 0)
+		return -ENOENT;
+
+	if (pos >= SEC_DEBUG_RESET_TZLOG_SIZE) {
+		pr_info("%s : pos %lld, size %d\n", __func__, pos, SEC_DEBUG_RESET_TZLOG_SIZE);
+		sec_reset_tzlog_completed();
+		return 0;
+	}
+
+	count = min(len, (size_t)(SEC_DEBUG_RESET_TZLOG_SIZE - pos));
+	if (copy_to_user(buf, tzlog_buf + pos, count))
+		return -EFAULT;
+
+	*offset += count;
+	return count;
+}
+
+static const struct file_operations sec_reset_tzlog_proc_fops = {
+	.owner = THIS_MODULE,
+	.read = sec_reset_tzlog_proc_read,
+};
+
 static int set_store_lastkmsg_proc_show(struct seq_file *m, void *v)
 {
-	if (get_debug_reset_header(DRH_TYPE_CHECK_STORE) < 0)
+	struct debug_reset_header *check_store = NULL;
+
+	if (check_store != NULL) {
+		pr_err("%s : already memory alloc for check_store\n", __func__);
+		return -EINVAL;
+	}
+
+	check_store = get_debug_reset_header();
+	if (check_store == NULL) {
 		seq_printf(m, "0\n");
-	else
+	} else {
 		seq_printf(m, "1\n");
+	}
+
+	if (check_store != NULL) {
+		kfree(check_store);
+		check_store = NULL;
+	}
 
 	return 0;
 }
@@ -1748,12 +1776,6 @@ static int __init sec_debug_reset_reason_init(void)
 	if (!entry)
 		return -ENOMEM;
 
-	entry = proc_create("reset_reason_extra_info", S_IWUGO, NULL,
-		&sec_reset_extra_info_proc_fops);
-
-	if (!entry)
-		return -ENOMEM;
-
 	entry = proc_create("reset_summary", S_IWUGO, NULL,
 			&sec_reset_summary_info_proc_fops);
 
@@ -1766,6 +1788,11 @@ static int __init sec_debug_reset_reason_init(void)
 	if (!entry)
 		return -ENOMEM;	
 
+	entry = proc_create("reset_tzlog", S_IWUGO, NULL,
+			&sec_reset_tzlog_proc_fops);
+
+	if (!entry)
+		return -ENOMEM;	
 	entry = proc_create("store_lastkmsg", S_IWUGO, NULL,
 			&sec_store_lastkmsg_proc_fops);
 
@@ -1783,6 +1810,8 @@ device_initcall(sec_debug_reset_reason_init);
 int __init sec_debug_init(void)
 {
 	int ret;
+	uint32_t scm_id = 0; 
+	struct scm_desc desc = {0}; 
 
 #ifdef CONFIG_USER_RESET_DEBUG
 	sec_debug_get_extra_info_region();
@@ -1810,8 +1839,32 @@ int __init sec_debug_init(void)
 		sec_do_bypass_sdi_execution_in_low();
 		return -EPERM;
 	}
+	long_press_pwrkey_timer_init();
+
+	scm_id = _TZ_DUMP_SECURITY_ALLOWS_MEM_DUMP_ID;
+	desc.arginfo = _TZ_DUMP_SECURITY_ALLOWS_MEM_DUMP_ID_PARAM_ID;
+
+	ret = scm_call2(scm_id, &desc);
+
+	if (!ret) {
+		pr_info("%s: syscall returns: %#llx, %#llx\n", __func__, desc.ret[0], desc.ret[1]);
+		secure_dump = desc.ret[0];
+	}
+	else {
+		pr_err("%s: syscall Error: 0x%x\n", __func__, ret); 
+	}
 
 	return 0;
+}
+
+int sec_debug_is_secure_dump(void)
+{
+	return secure_dump;
+}
+
+int sec_debug_is_rp_enabled(void)
+{
+	return rp_enabled;
 }
 
 int sec_debug_is_enabled(void)
@@ -1842,7 +1895,7 @@ int sec_debug_print_file_list(void)
 	printk(KERN_ERR " [Opened file list of process %s(PID:%d, TGID:%d) :: %d]\n",
 		current->group_leader->comm, current->pid, current->tgid,nCnt);
 
-	for (i=0; i<nCnt; i++) {
+	for (i = 0; i < nCnt; i++) {
 
 		rcu_read_lock();
 		file = fcheck_files(files, i);
@@ -1865,14 +1918,24 @@ int sec_debug_print_file_list(void)
 		}
 		rcu_read_unlock();
 	}
-	if(ret == nCnt)
+	if(ret > nCnt - 50)
 		return 1;
 	else
 		return 0;
 }
 
-void sec_debug_EMFILE_error_proc(void)
+void sec_debug_EMFILE_error_proc(unsigned long files_addr)
 {
+	if (files_addr!=(unsigned long)(current->files)) {
+		printk(KERN_ERR "Too many open files Error at %pS\n"
+						"%s(%d) thread of %s process tried fd allocation by proxy.\n"
+						"files_addr = 0x%lx, current->files=0x%p\n",
+					__builtin_return_address(0),
+					current->comm,current->tgid,current->group_leader->comm,
+					files_addr, current->files);
+		return;
+	}
+	
 	printk(KERN_ERR "Too many open files(%d:%s)\n",
 		current->tgid, current->group_leader->comm);
 
@@ -1889,7 +1952,6 @@ void sec_debug_EMFILE_error_proc(void)
 	}
 }
 #endif
-
 
 /* klaatu - schedule log */
 #ifdef CONFIG_SEC_DEBUG_SCHED_LOG

@@ -429,10 +429,22 @@ static ssize_t mdss_samsung_disp_octa_id_show(struct device *dev,
 	snprintf((char *)temp, sizeof(temp),
 			"%d%d%d%02x%02x%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n",
 		site, rework, poc, octa_id[2], octa_id[3],
-	        octa_id[4], octa_id[5], octa_id[6], octa_id[7],
-	        octa_id[8], octa_id[9], octa_id[10], octa_id[11],
-	        octa_id[12], octa_id[13], octa_id[14], octa_id[15],
-	        octa_id[16], octa_id[17], octa_id[18], octa_id[19]);
+		octa_id[4]!= 0 ? octa_id[4] : '0',
+		octa_id[5]!= 0 ? octa_id[5] : '0',
+		octa_id[6]!= 0 ? octa_id[6] : '0',
+		octa_id[7]!= 0 ? octa_id[7] : '0',
+		octa_id[8]!= 0 ? octa_id[8] : '0',
+		octa_id[9]!= 0 ? octa_id[9] : '0',
+		octa_id[10]!= 0 ? octa_id[10] : '0',
+		octa_id[11]!= 0 ? octa_id[11] : '0',
+		octa_id[12]!= 0 ? octa_id[12] : '0',
+		octa_id[13]!= 0 ? octa_id[13] : '0',
+		octa_id[14]!= 0 ? octa_id[14] : '0',
+		octa_id[15]!= 0 ? octa_id[15] : '0',
+		octa_id[16]!= 0 ? octa_id[16] : '0',
+		octa_id[17]!= 0 ? octa_id[17] : '0',
+		octa_id[18]!= 0 ? octa_id[18] : '0',
+		octa_id[19]!= 0 ? octa_id[19] : '0');
 
 	strlcat(buf, temp, string_size);
 
@@ -440,10 +452,22 @@ static ssize_t mdss_samsung_disp_octa_id_show(struct device *dev,
 
 	LCD_INFO("%d%d%d%02x%02x%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n",
 		site, rework, poc, octa_id[2], octa_id[3],
-	        octa_id[4], octa_id[5], octa_id[6], octa_id[7],
-	        octa_id[8], octa_id[9], octa_id[10], octa_id[11],
-	        octa_id[12], octa_id[13], octa_id[14], octa_id[15],
-	        octa_id[16], octa_id[17], octa_id[18], octa_id[19]);
+		octa_id[4]!= 0 ? octa_id[4] : '0',
+		octa_id[5]!= 0 ? octa_id[5] : '0',
+		octa_id[6]!= 0 ? octa_id[6] : '0',
+		octa_id[7]!= 0 ? octa_id[7] : '0',
+		octa_id[8]!= 0 ? octa_id[8] : '0',
+		octa_id[9]!= 0 ? octa_id[9] : '0',
+		octa_id[10]!= 0 ? octa_id[10] : '0',
+		octa_id[11]!= 0 ? octa_id[11] : '0',
+		octa_id[12]!= 0 ? octa_id[12] : '0',
+		octa_id[13]!= 0 ? octa_id[13] : '0',
+		octa_id[14]!= 0 ? octa_id[14] : '0',
+		octa_id[15]!= 0 ? octa_id[15] : '0',
+		octa_id[16]!= 0 ? octa_id[16] : '0',
+		octa_id[17]!= 0 ? octa_id[17] : '0',
+		octa_id[18]!= 0 ? octa_id[18] : '0',
+		octa_id[19]!= 0 ? octa_id[19] : '0');
 
 	return strnlen(buf, string_size);
 }
@@ -992,8 +1016,8 @@ static ssize_t mdss_samsung_read_copr_show(struct device *dev,
 
 	if (vdd->copr.copr_on) {
 		vdd->panel_func.samsung_copr_read(vdd);
-		LCD_INFO("%d %d\n", vdd->copr.copr_data, vdd->bl_level);
-		ret = snprintf((char *)buf, 20, "%d %d\n", vdd->copr.copr_data, vdd->bl_level);
+		LCD_INFO("%d\n", vdd->copr.copr_data);
+		ret = snprintf((char *)buf, 20, "%d\n", vdd->copr.copr_data);
 	} else {
 		ret = snprintf((char *)buf, 20, "-1 -1\n");
 	}
@@ -1454,6 +1478,75 @@ end:
 	return size;
 }
 
+static ssize_t mipi_samsung_mst_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+	struct mdss_dsi_ctrl_pdata *ctrl;
+	int input;
+
+	if (IS_ERR_OR_NULL(vdd) || IS_ERR_OR_NULL(vdd->mfd_dsi[DISPLAY_1])) {
+		LCD_ERR("no vdd");
+		goto end;
+	}
+
+	ctrl = samsung_get_dsi_ctrl(vdd);
+	if (IS_ERR_OR_NULL(ctrl)) {
+		LCD_ERR("ctrl is null..");
+		return -ENODEV;;
+	}
+
+	sscanf(buf, "%d" , &input);
+
+	LCD_INFO("(%d)\n", input);
+
+	if (input)
+		mdss_samsung_send_cmd(ctrl, TX_MICRO_SHORT_TEST_ON);
+	else
+		mdss_samsung_send_cmd(ctrl, TX_MICRO_SHORT_TEST_OFF);
+end:
+	return size;
+}
+
+static ssize_t mipi_samsung_grayspot_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+	struct mdss_dsi_ctrl_pdata *ctrl;
+	struct dsi_panel_cmds *gray_spot_test_off_cmds;
+
+	int input;
+
+	if (IS_ERR_OR_NULL(vdd) || IS_ERR_OR_NULL(vdd->mfd_dsi[DISPLAY_1])) {
+		LCD_ERR("no vdd");
+		goto end;
+	}
+
+	ctrl = samsung_get_dsi_ctrl(vdd);
+	if (IS_ERR_OR_NULL(ctrl)) {
+		LCD_ERR("ctrl is null..");
+		return -ENODEV;;
+	}
+
+	sscanf(buf, "%d" , &input);
+	LCD_INFO("(%d)\n", input);
+
+	if (input) {
+		mdss_samsung_send_cmd(ctrl, TX_GRAY_SPOT_TEST_ON);
+	}
+	else {
+		gray_spot_test_off_cmds = get_panel_tx_cmds(ctrl, TX_GRAY_SPOT_TEST_OFF);
+		gray_spot_test_off_cmds->cmds[2].payload[24] =
+			vdd->display_status_dsi[ctrl->ndx].elvss_value1;
+		LCD_INFO("elvss_value1 - 0x(%x)\n", vdd->display_status_dsi[ctrl->ndx].elvss_value1);
+		mdss_samsung_send_cmd(ctrl, TX_GRAY_SPOT_TEST_OFF);
+	}
+end:
+	return size;
+}
+
 #if defined(CONFIG_SUPPORT_POC_FLASH)
 #define MAX_POC_SHOW_WAIT 500
 static ssize_t mipi_samsung_poc_show(struct device *dev,
@@ -1514,14 +1607,8 @@ static ssize_t mipi_samsung_poc_show(struct device *dev,
 
 		rx_cmds = get_panel_rx_cmds(ctrl, RX_POC_STATUS);
 		mdss_samsung_panel_data_read(ctrl, rx_cmds, EB_value, LEVEL1_KEY);
-			
-		snprintf((char *)temp, sizeof(temp), "%d %d %02x\n", poc, check_sum[4], EB_value[3]);
-		strlcat(buf, temp, string_size);
-	} else {
+	} else
 		LCD_INFO("MDSS FAIL TO RX -- wait_cnt : %d max_cnt : %d --\n", wait_cnt, MAX_POC_SHOW_WAIT);
-		snprintf((char *)temp, sizeof(temp), "%d %d %02x\n", poc, check_sum[4], EB_value[3]);
-		strlcat(buf, temp, string_size);
-	}
 
 	LCD_INFO("CHECKSUM : (%d)(%d)(%d)(%d)(%d)\n",
 			check_sum[0], check_sum[1], check_sum[2], check_sum[3], check_sum[4] );
@@ -1529,12 +1616,12 @@ static ssize_t mipi_samsung_poc_show(struct device *dev,
 			EB_value[0], EB_value[1], EB_value[2], EB_value[3]);
 	LCD_INFO("%d %d %02x\n", poc, check_sum[4], EB_value[3]);
 
+	snprintf((char *)temp, sizeof(temp), "%d %d %02x\n", poc, check_sum[4], EB_value[3]);
+	strlcat(buf, temp, string_size);
+
 	return strnlen(buf, string_size);
 }
 
-#define POC_IMG_SIZE			(532816)
-#define POC_IMG_ADDR			(0x000000)
-#define POC_TEST_PATTERN_SIZE	(1024)
 static ssize_t mipi_samsung_poc_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
@@ -1569,7 +1656,7 @@ static ssize_t mipi_samsung_poc_store(struct device *dev,
 		LCD_INFO("READ \n");
 	} else if (input == 4) {
 		LCD_INFO("STOP\n");
-		atomic_set(&vdd->poc_driver.cancel, 1); 
+		atomic_set(&vdd->poc_driver.cancel, 1);
 	} else {
 		LCD_INFO("input check !! \n");
 	}
@@ -1611,6 +1698,76 @@ static ssize_t xtalk_store(struct device *dev,
 	}
 	pdata->set_backlight(pdata, vdd->bl_level);
 end:
+	return size;
+}
+
+static ssize_t gct_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+	int res;
+
+	if (IS_ERR_OR_NULL(vdd) || IS_ERR_OR_NULL(vdd->mfd_dsi[DISPLAY_1])) {
+		LCD_ERR("no vdd");
+		res = -ENODEV;
+		goto end;
+	}
+
+	if (!vdd->gct.is_support || !vdd->panel_func.samsung_gct_read) {
+		res = -EPERM;
+		goto end;
+	}
+
+	res = vdd->panel_func.samsung_gct_read(vdd);
+
+end:
+	sprintf(buf, "%d 0x%x%x%x%x", res,
+			vdd->gct.checksum[3], vdd->gct.checksum[2],
+			vdd->gct.checksum[1], vdd->gct.checksum[0]);
+
+	return strlen(buf);
+}
+
+static ssize_t gct_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+	struct mdss_dsi_ctrl_pdata *ctrl;
+	struct mdss_panel_info *pinfo;
+	int ret;
+
+	LCD_INFO("+\n");
+	if (IS_ERR_OR_NULL(vdd) || IS_ERR_OR_NULL(vdd->mfd_dsi[DISPLAY_1])) {
+		LCD_ERR("no vdd");
+		return -ENODEV;
+	}
+
+	ctrl = samsung_get_dsi_ctrl(vdd);
+	if (IS_ERR_OR_NULL(ctrl)) {
+		LCD_ERR("ctrl is null..");
+		return -ENODEV;;
+	}
+
+	pinfo = &ctrl->panel_data.panel_info;
+
+	if (pinfo->blank_state != MDSS_PANEL_BLANK_UNBLANK) {
+		LCD_ERR("not unblank status(%d)", pinfo->blank_state);
+		return -EPERM;
+	}
+
+	if (vdd->gct.is_support && vdd->panel_func.samsung_gct_write) {
+		mdss_samsung_set_max_cpufreq(vdd, true, CPUFREQ_CLUSTER_ALL);
+		mdss_dsi_samsung_poc_perf_mode_ctl(ctrl, true);
+
+		ret = vdd->panel_func.samsung_gct_write(vdd);
+
+		mdss_dsi_samsung_poc_perf_mode_ctl(ctrl, false);
+		mdss_samsung_set_max_cpufreq(vdd, false, CPUFREQ_CLUSTER_ALL);
+	}
+	LCD_INFO("-\n");
+
 	return size;
 }
 
@@ -1913,6 +2070,142 @@ static ssize_t mdss_samsung_disp_SVC_OCTA2_show(struct device *dev,
 	return strnlen(buf, string_size);
 }
 
+static ssize_t mdss_samsung_disp_SVC_OCTA_CHIPID_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	static int string_size = 50;
+	char temp[string_size];
+	int *octa_id;
+	int site, rework, poc, max_brightness;
+
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("no vdd");
+		return strnlen(buf, string_size);
+	}
+
+	octa_id = &vdd->octa_id_dsi[DISPLAY_1][0];
+
+	site = octa_id[0] & 0xf0;
+	site >>= 4;
+	rework = octa_id[0] & 0x0f;
+	poc = octa_id[1] & 0x0f;
+	max_brightness = octa_id[2] * 256 + octa_id[3];
+
+	snprintf((char *)temp, sizeof(temp),
+			"%d%d%d%02x%02x%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n",
+		site, rework, poc, octa_id[2], octa_id[3],
+		octa_id[4]!= 0 ? octa_id[4] : '0',
+		octa_id[5]!= 0 ? octa_id[5] : '0',
+		octa_id[6]!= 0 ? octa_id[6] : '0',
+		octa_id[7]!= 0 ? octa_id[7] : '0',
+		octa_id[8]!= 0 ? octa_id[8] : '0',
+		octa_id[9]!= 0 ? octa_id[9] : '0',
+		octa_id[10]!= 0 ? octa_id[10] : '0',
+		octa_id[11]!= 0 ? octa_id[11] : '0',
+		octa_id[12]!= 0 ? octa_id[12] : '0',
+		octa_id[13]!= 0 ? octa_id[13] : '0',
+		octa_id[14]!= 0 ? octa_id[14] : '0',
+		octa_id[15]!= 0 ? octa_id[15] : '0',
+		octa_id[16]!= 0 ? octa_id[16] : '0',
+		octa_id[17]!= 0 ? octa_id[17] : '0',
+		octa_id[18]!= 0 ? octa_id[18] : '0',
+		octa_id[19]!= 0 ? octa_id[19] : '0');
+
+	strlcat(buf, temp, string_size);
+
+	LCD_INFO("%d%d%d%02x%02x%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n",
+		site, rework, poc, octa_id[2], octa_id[3],
+		octa_id[4]!= 0 ? octa_id[4] : '0',
+		octa_id[5]!= 0 ? octa_id[5] : '0',
+		octa_id[6]!= 0 ? octa_id[6] : '0',
+		octa_id[7]!= 0 ? octa_id[7] : '0',
+		octa_id[8]!= 0 ? octa_id[8] : '0',
+		octa_id[9]!= 0 ? octa_id[9] : '0',
+		octa_id[10]!= 0 ? octa_id[10] : '0',
+		octa_id[11]!= 0 ? octa_id[11] : '0',
+		octa_id[12]!= 0 ? octa_id[12] : '0',
+		octa_id[13]!= 0 ? octa_id[13] : '0',
+		octa_id[14]!= 0 ? octa_id[14] : '0',
+		octa_id[15]!= 0 ? octa_id[15] : '0',
+		octa_id[16]!= 0 ? octa_id[16] : '0',
+		octa_id[17]!= 0 ? octa_id[17] : '0',
+		octa_id[18]!= 0 ? octa_id[18] : '0',
+		octa_id[19]!= 0 ? octa_id[19] : '0');
+
+	return strnlen(buf, string_size);
+}
+
+static ssize_t mdss_samsung_disp_SVC_OCTA2_CHIPID_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	static int string_size = 50;
+	char temp[string_size];
+	int *octa_id;
+	int site, rework, poc, max_brightness;
+
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("no vdd");
+		return strnlen(buf, string_size);
+	}
+
+	octa_id = &vdd->octa_id_dsi[DISPLAY_2][0];
+
+	site = octa_id[0] & 0xf0;
+	site >>= 4;
+	rework = octa_id[0] & 0x0f;
+	poc = octa_id[1] & 0x0f;
+	max_brightness = octa_id[2] * 256 + octa_id[3];
+
+	snprintf((char *)temp, sizeof(temp),
+			"%d%d%d%02x%02x%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n",
+		site, rework, poc, octa_id[2], octa_id[3],
+		octa_id[4]!= 0 ? octa_id[4] : '0',
+		octa_id[5]!= 0 ? octa_id[5] : '0',
+		octa_id[6]!= 0 ? octa_id[6] : '0',
+		octa_id[7]!= 0 ? octa_id[7] : '0',
+		octa_id[8]!= 0 ? octa_id[8] : '0',
+		octa_id[9]!= 0 ? octa_id[9] : '0',
+		octa_id[10]!= 0 ? octa_id[10] : '0',
+		octa_id[11]!= 0 ? octa_id[11] : '0',
+		octa_id[12]!= 0 ? octa_id[12] : '0',
+		octa_id[13]!= 0 ? octa_id[13] : '0',
+		octa_id[14]!= 0 ? octa_id[14] : '0',
+		octa_id[15]!= 0 ? octa_id[15] : '0',
+		octa_id[16]!= 0 ? octa_id[16] : '0',
+		octa_id[17]!= 0 ? octa_id[17] : '0',
+		octa_id[18]!= 0 ? octa_id[18] : '0',
+		octa_id[19]!= 0 ? octa_id[19] : '0');
+
+	strlcat(buf, temp, string_size);
+
+	LCD_INFO("%d%d%d%02x%02x%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n",
+		site, rework, poc, octa_id[2], octa_id[3],
+		octa_id[4]!= 0 ? octa_id[4] : '0',
+		octa_id[5]!= 0 ? octa_id[5] : '0',
+		octa_id[6]!= 0 ? octa_id[6] : '0',
+		octa_id[7]!= 0 ? octa_id[7] : '0',
+		octa_id[8]!= 0 ? octa_id[8] : '0',
+		octa_id[9]!= 0 ? octa_id[9] : '0',
+		octa_id[10]!= 0 ? octa_id[10] : '0',
+		octa_id[11]!= 0 ? octa_id[11] : '0',
+		octa_id[12]!= 0 ? octa_id[12] : '0',
+		octa_id[13]!= 0 ? octa_id[13] : '0',
+		octa_id[14]!= 0 ? octa_id[14] : '0',
+		octa_id[15]!= 0 ? octa_id[15] : '0',
+		octa_id[16]!= 0 ? octa_id[16] : '0',
+		octa_id[17]!= 0 ? octa_id[17] : '0',
+		octa_id[18]!= 0 ? octa_id[18] : '0',
+		octa_id[19]!= 0 ? octa_id[19] : '0');
+
+	return strnlen(buf, string_size);
+}
+
 static ssize_t mipi_samsung_esd_check_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
@@ -2149,19 +2442,25 @@ static int mdss_samsung_register_dpui(struct samsung_display_driver_data *vdd)
 static ssize_t mdss_samsung_dpui_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	update_dpui_log(DPUI_LOG_LEVEL_INFO);
-	get_dpui_log(buf, DPUI_LOG_LEVEL_INFO);
+	int ret;
+
+	update_dpui_log(DPUI_LOG_LEVEL_INFO, DPUI_TYPE_PANEL);
+	ret = get_dpui_log(buf, DPUI_LOG_LEVEL_INFO, DPUI_TYPE_PANEL);
+	if (ret < 0) {
+		pr_err("%s failed to get log %d\n", __func__, ret);
+		return ret;
+	}
 
 	pr_info("%s\n", buf);
 
-	return strlen(buf);
+	return ret;
 }
 
 static ssize_t mdss_samsung_dpui_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	if (buf[0] == 'C' || buf[0] == 'c' )
-		clear_dpui_log(DPUI_LOG_LEVEL_INFO);
+		clear_dpui_log(DPUI_LOG_LEVEL_INFO, DPUI_TYPE_PANEL);
 
 	return size;
 }
@@ -2173,22 +2472,88 @@ static ssize_t mdss_samsung_dpui_store(struct device *dev,
 static ssize_t mdss_samsung_dpui_dbg_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	update_dpui_log(DPUI_LOG_LEVEL_DEBUG);
-	get_dpui_log(buf, DPUI_LOG_LEVEL_DEBUG);
+	int ret;
+
+	update_dpui_log(DPUI_LOG_LEVEL_DEBUG, DPUI_TYPE_PANEL);
+	ret = get_dpui_log(buf, DPUI_LOG_LEVEL_DEBUG, DPUI_TYPE_PANEL);
+	if (ret < 0) {
+		pr_err("%s failed to get log %d\n", __func__, ret);
+		return ret;
+	}
 
 	pr_info("%s\n", buf);
 
-	return strlen(buf);
+	return ret;
 }
 
 static ssize_t mdss_samsung_dpui_dbg_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	if (buf[0] == 'C' || buf[0] == 'c' )
-		clear_dpui_log(DPUI_LOG_LEVEL_DEBUG);
+		clear_dpui_log(DPUI_LOG_LEVEL_DEBUG, DPUI_TYPE_PANEL);
 
 	return size;
 }
+
+/*
+ * [AP DEPENDENT ONLY]
+ * HW PARAM LOGGING SYSFS NODE
+ */
+static ssize_t mdss_samsung_dpci_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	int ret;
+
+	update_dpui_log(DPUI_LOG_LEVEL_INFO, DPUI_TYPE_CTRL);
+	ret = get_dpui_log(buf, DPUI_LOG_LEVEL_INFO, DPUI_TYPE_CTRL);
+	if (ret < 0) {
+		pr_err("%s failed to get log %d\n", __func__, ret);
+		return ret;
+	}
+
+	pr_info("%s\n", buf);
+
+	return ret;
+}
+
+static ssize_t mdss_samsung_dpci_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t size)
+{
+	if (buf[0] == 'C' || buf[0] == 'c')
+		clear_dpui_log(DPUI_LOG_LEVEL_INFO, DPUI_TYPE_CTRL);
+
+	return size;
+}
+
+/*
+ * [AP DEPENDENT DEV ONLY]
+ * HW PARAM LOGGING SYSFS NODE
+ */
+static ssize_t mdss_samsung_dpci_dbg_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	int ret;
+
+	update_dpui_log(DPUI_LOG_LEVEL_DEBUG, DPUI_TYPE_CTRL);
+	ret = get_dpui_log(buf, DPUI_LOG_LEVEL_DEBUG, DPUI_TYPE_CTRL);
+	if (ret < 0) {
+		pr_err("%s failed to get log %d\n", __func__, ret);
+		return ret;
+	}
+
+	pr_info("%s\n", buf);
+	return ret;
+}
+
+static ssize_t mdss_samsung_dpci_dbg_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t size)
+{
+	if (buf[0] == 'C' || buf[0] == 'c')
+		clear_dpui_log(DPUI_LOG_LEVEL_DEBUG, DPUI_TYPE_CTRL);
+
+	return size;
+}
+#endif
 
 u8 csc_update = 1;
 u8 csc_change = 0;
@@ -2219,6 +2584,23 @@ static ssize_t csc_write_cfg(struct device *dev,
 
 	return ret;
 }
+
+#if defined(CONFIG_FOLDER_HALL)
+static ssize_t mdss_samsung_force_flip_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t size)
+{
+	int value;
+
+	sscanf(buf, "%d" , &value);	
+	LCD_INFO("flip to %s panel\n", value ? "sub" : "main");
+
+	if (value != 0) //flip to sub panel
+		samsung_display_hall_ic_status(NULL, LCD_FLIP_NOT_REFRESH | HALL_IC_CLOSE, NULL);
+	else //flip to main panel
+		samsung_display_hall_ic_status(NULL, LCD_FLIP_NOT_REFRESH | HALL_IC_OPEN, NULL);
+
+	return size;
+}
 #endif
 
 static DEVICE_ATTR(lcd_type, S_IRUGO, mdss_samsung_disp_lcdtype_show, NULL);
@@ -2240,6 +2622,7 @@ static DEVICE_ATTR(alpm, S_IRUGO | S_IWUSR | S_IWGRP, mdss_samsung_panel_lpm_sho
 static DEVICE_ATTR(hmt_bright, S_IRUGO | S_IWUSR | S_IWGRP, mipi_samsung_hmt_bright_show, mipi_samsung_hmt_bright_store);
 static DEVICE_ATTR(hmt_on, S_IRUGO | S_IWUSR | S_IWGRP,	mipi_samsung_hmt_on_show, mipi_samsung_hmt_on_store);
 static DEVICE_ATTR(mcd_mode, S_IRUGO | S_IWUSR | S_IWGRP, NULL, mipi_samsung_mcd_store);
+static DEVICE_ATTR(mst, S_IRUGO | S_IWUSR | S_IWGRP, NULL, mipi_samsung_mst_store);
 #if defined(CONFIG_SUPPORT_POC_FLASH)
 static DEVICE_ATTR(poc, S_IRUGO | S_IWUSR | S_IWGRP, mipi_samsung_poc_show, mipi_samsung_poc_store);
 #endif
@@ -2251,14 +2634,23 @@ static DEVICE_ATTR(multires, S_IRUGO | S_IWUSR | S_IWGRP, mdss_samsung_multires_
 static DEVICE_ATTR(cover_control, S_IRUGO | S_IWUSR | S_IWGRP, mdss_samsung_cover_control_show, mdss_samsung_cover_control_store);
 static DEVICE_ATTR(SVC_OCTA, S_IRUGO, mdss_samsung_disp_SVC_OCTA_show, NULL);
 static DEVICE_ATTR(SVC_OCTA2, S_IRUGO, mdss_samsung_disp_SVC_OCTA2_show, NULL);
+static DEVICE_ATTR(SVC_OCTA_CHIPID, S_IRUGO, mdss_samsung_disp_SVC_OCTA_CHIPID_show, NULL);
+static DEVICE_ATTR(SVC_OCTA2_CHIPID, S_IRUGO, mdss_samsung_disp_SVC_OCTA2_CHIPID_show, NULL);
 static DEVICE_ATTR(esd_check, S_IRUGO , mipi_samsung_esd_check_show, NULL);
 static DEVICE_ATTR(act_clock_test, S_IRUGO | S_IWUSR | S_IWGRP, mdss_samsung_active_clock_show, mdss_samsung_active_clock_store);
 static DEVICE_ATTR(tuning, 0664, tuning_show, tuning_store);
 static DEVICE_ATTR(csc_cfg, S_IRUGO | S_IWUSR, csc_read_cfg, csc_write_cfg);
 static DEVICE_ATTR(xtalk_mode, S_IRUGO | S_IWUSR | S_IWGRP, NULL, xtalk_store);
+static DEVICE_ATTR(gct, S_IRUGO | S_IWUSR | S_IWGRP, gct_show, gct_store);
+static DEVICE_ATTR(grayspot, S_IRUGO | S_IWUSR | S_IWGRP, NULL, mipi_samsung_grayspot_store);
 #ifdef CONFIG_DISPLAY_USE_INFO
 static DEVICE_ATTR(dpui, S_IRUSR|S_IRGRP, mdss_samsung_dpui_show, mdss_samsung_dpui_store);
 static DEVICE_ATTR(dpui_dbg, S_IRUSR|S_IRGRP, mdss_samsung_dpui_dbg_show, mdss_samsung_dpui_dbg_store);
+static DEVICE_ATTR(dpci, S_IRUSR|S_IRGRP, mdss_samsung_dpci_show, mdss_samsung_dpci_store);
+static DEVICE_ATTR(dpci_dbg, S_IRUSR|S_IRGRP, mdss_samsung_dpci_dbg_show, mdss_samsung_dpci_dbg_store);
+#endif
+#if defined(CONFIG_FOLDER_HALL)
+static DEVICE_ATTR(force_flip, S_IWUSR | S_IWGRP, NULL, mdss_samsung_force_flip_store);
 #endif
 
 static struct attribute *panel_sysfs_attributes[] = {
@@ -2289,15 +2681,25 @@ static struct attribute *panel_sysfs_attributes[] = {
 	&dev_attr_cover_control.attr,
 	&dev_attr_SVC_OCTA.attr,
 	&dev_attr_SVC_OCTA2.attr,
+	&dev_attr_SVC_OCTA_CHIPID.attr,
+	&dev_attr_SVC_OCTA2_CHIPID.attr,
 	&dev_attr_esd_check.attr,
 	&dev_attr_act_clock_test.attr,
 	&dev_attr_xtalk_mode.attr,
+	&dev_attr_gct.attr,
+	&dev_attr_mst.attr,
+	&dev_attr_grayspot.attr,
 #if defined(CONFIG_SUPPORT_POC_FLASH)
 	&dev_attr_poc.attr,
 #endif
 #ifdef CONFIG_DISPLAY_USE_INFO
 	&dev_attr_dpui.attr,
 	&dev_attr_dpui_dbg.attr,
+	&dev_attr_dpci.attr,
+	&dev_attr_dpci_dbg.attr,
+#endif
+#if defined(CONFIG_FOLDER_HALL)
+	&dev_attr_force_flip.attr,
 #endif
 	NULL
 };

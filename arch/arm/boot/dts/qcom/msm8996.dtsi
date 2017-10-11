@@ -237,7 +237,7 @@
 };
 
 #include "msm8996-ion.dtsi"
-#include "msm8996-mdss.dtsi"
+#include "msm8996-sde.dtsi"
 #include "msm8996-mdss-pll.dtsi"
 #include "msm8996-smp2p.dtsi"
 #include "msm8996-ipcrouter.dtsi"
@@ -3901,6 +3901,7 @@
 	clock-names = "core_clk";
 	clocks = <&clock_mmss clk_camss_cpp_clk>;
 	parent-supply = <&gdsc_camss_top>;
+	qcom,support-hw-trigger;
 	status = "ok";
 };
 

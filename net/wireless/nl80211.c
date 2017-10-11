@@ -402,6 +402,12 @@ static const struct nla_policy nl80211_policy[NUM_NL80211_ATTR] = {
 	[NL80211_ATTR_SCHED_SCAN_DELAY] = { .type = NLA_U32 },
 	[NL80211_ATTR_REG_INDOOR] = { .type = NLA_FLAG },
 	[NL80211_ATTR_PBSS] = { .type = NLA_FLAG },
+	[NL80211_ATTR_BSS_SELECT] = { .type = NLA_NESTED },
+	[NL80211_ATTR_BSSID] = { .len = ETH_ALEN },
+	[NL80211_ATTR_SCHED_SCAN_RELATIVE_RSSI] = { .type = NLA_S8 },
+	[NL80211_ATTR_SCHED_SCAN_RSSI_ADJUST] = {
+		.len = sizeof(struct nl80211_bss_select_rssi_adjust)
+	},
 };
 
 /* policy for the key attributes */
@@ -484,6 +490,15 @@ static const struct nla_policy
 nl80211_plan_policy[NL80211_SCHED_SCAN_PLAN_MAX + 1] = {
 	[NL80211_SCHED_SCAN_PLAN_INTERVAL] = { .type = NLA_U32 },
 	[NL80211_SCHED_SCAN_PLAN_ITERATIONS] = { .type = NLA_U32 },
+};
+
+static const struct nla_policy
+nl80211_bss_select_policy[NL80211_BSS_SELECT_ATTR_MAX + 1] = {
+	[NL80211_BSS_SELECT_ATTR_RSSI] = { .type = NLA_FLAG },
+	[NL80211_BSS_SELECT_ATTR_BAND_PREF] = { .type = NLA_U32 },
+	[NL80211_BSS_SELECT_ATTR_RSSI_ADJUST] = {
+		.len = sizeof(struct nl80211_bss_select_rssi_adjust)
+	},
 };
 
 static int nl80211_prepare_wdev_dump(struct sk_buff *skb,
@@ -1551,6 +1566,7 @@ static int nl80211_send_wiphy(struct cfg80211_registered_device *rdev,
 			if (rdev->wiphy.features &
 					NL80211_FEATURE_SUPPORTS_WMM_ADMISSION)
 				CMD(add_tx_ts, ADD_TX_TS);
+			CMD(update_connect_params, UPDATE_CONNECT_PARAMS);
 		}
 		/* add into the if now */
 #undef CMD
@@ -1774,6 +1790,25 @@ static int nl80211_send_wiphy(struct cfg80211_registered_device *rdev,
 				state->capa_start = i + 1;
 				break;
 			}
+		}
+
+		if (rdev->wiphy.bss_select_support) {
+			struct nlattr *nested;
+			u32 bss_select_support = rdev->wiphy.bss_select_support;
+
+			nested = nla_nest_start(msg, NL80211_ATTR_BSS_SELECT);
+			if (!nested)
+				goto nla_put_failure;
+
+			i = 0;
+			while (bss_select_support) {
+				if ((bss_select_support & 1) &&
+				    nla_put_flag(msg, i))
+					goto nla_put_failure;
+				i++;
+				bss_select_support >>= 1;
+			}
+			nla_nest_end(msg, nested);
 		}
 
 		/* done */
@@ -3478,13 +3513,12 @@ out:
 	return 0;
 }
 
-static int validate_beacon_tx_rate(struct cfg80211_ap_settings *params)
+static int validate_beacon_tx_rate(struct cfg80211_registered_device *rdev,
+				   enum nl80211_band band,
+				   struct cfg80211_bitrate_mask *beacon_rate)
 {
-	u32 rate, count_ht, count_vht, i;
-	enum nl80211_band band;
-
-	band = params->chandef.chan->band;
-	rate = params->beacon_rate.control[band].legacy;
+	u32 count_ht, count_vht, i;
+	u32 rate = beacon_rate->control[band].legacy;
 
 	/* Allow only one rate */
 	if (hweight32(rate) > 1)
@@ -3492,9 +3526,9 @@ static int validate_beacon_tx_rate(struct cfg80211_ap_settings *params)
 
 	count_ht = 0;
 	for (i = 0; i < IEEE80211_HT_MCS_MASK_LEN; i++) {
-		if (hweight8(params->beacon_rate.control[band].ht_mcs[i]) > 1) {
+		if (hweight8(beacon_rate->control[band].ht_mcs[i]) > 1) {
 			return -EINVAL;
-		} else if (params->beacon_rate.control[band].ht_mcs[i]) {
+		} else if (beacon_rate->control[band].ht_mcs[i]) {
 			count_ht++;
 			if (count_ht > 1)
 				return -EINVAL;
@@ -3505,9 +3539,9 @@ static int validate_beacon_tx_rate(struct cfg80211_ap_settings *params)
 
 	count_vht = 0;
 	for (i = 0; i < NL80211_VHT_NSS_MAX; i++) {
-		if (hweight16(params->beacon_rate.control[band].vht_mcs[i]) > 1) {
+		if (hweight16(beacon_rate->control[band].vht_mcs[i]) > 1) {
 			return -EINVAL;
-		} else if (params->beacon_rate.control[band].vht_mcs[i]) {
+		} else if (beacon_rate->control[band].vht_mcs[i]) {
 			count_vht++;
 			if (count_vht > 1)
 				return -EINVAL;
@@ -3517,6 +3551,19 @@ static int validate_beacon_tx_rate(struct cfg80211_ap_settings *params)
 	}
 
 	if ((count_ht && count_vht) || (!rate && !count_ht && !count_vht))
+		return -EINVAL;
+
+	if (rate &&
+	    !wiphy_ext_feature_isset(&rdev->wiphy,
+				     NL80211_EXT_FEATURE_BEACON_RATE_LEGACY))
+		return -EINVAL;
+	if (count_ht &&
+	    !wiphy_ext_feature_isset(&rdev->wiphy,
+				     NL80211_EXT_FEATURE_BEACON_RATE_HT))
+		return -EINVAL;
+	if (count_vht &&
+	    !wiphy_ext_feature_isset(&rdev->wiphy,
+				     NL80211_EXT_FEATURE_BEACON_RATE_VHT))
 		return -EINVAL;
 
 	return 0;
@@ -3757,7 +3804,8 @@ static int nl80211_start_ap(struct sk_buff *skb, struct genl_info *info)
 		if (err)
 			return err;
 
-		err = validate_beacon_tx_rate(&params);
+		err = validate_beacon_tx_rate(rdev, params.chandef.chan->band,
+					      &params.beacon_rate);
 		if (err)
 			return err;
 	}
@@ -6072,6 +6120,73 @@ static int validate_scan_freqs(struct nlattr *freqs)
 	return n_channels;
 }
 
+static bool is_band_valid(struct wiphy *wiphy, enum ieee80211_band b)
+{
+	return b < IEEE80211_NUM_BANDS && wiphy->bands[b];
+}
+
+static int parse_bss_select(struct nlattr *nla, struct wiphy *wiphy,
+			    struct cfg80211_bss_selection *bss_select)
+{
+	struct nlattr *attr[NL80211_BSS_SELECT_ATTR_MAX + 1];
+	struct nlattr *nest;
+	int err;
+	bool found = false;
+	int i;
+
+	/* only process one nested attribute */
+	nest = nla_data(nla);
+	if (!nla_ok(nest, nla_len(nest)))
+		return -EINVAL;
+
+	err = nla_parse(attr, NL80211_BSS_SELECT_ATTR_MAX, nla_data(nest),
+			nla_len(nest), nl80211_bss_select_policy);
+	if (err)
+		return err;
+
+	/* only one attribute may be given */
+	for (i = 0; i <= NL80211_BSS_SELECT_ATTR_MAX; i++) {
+		if (attr[i]) {
+			if (found)
+				return -EINVAL;
+			found = true;
+		}
+	}
+
+	bss_select->behaviour = __NL80211_BSS_SELECT_ATTR_INVALID;
+
+	if (attr[NL80211_BSS_SELECT_ATTR_RSSI])
+		bss_select->behaviour = NL80211_BSS_SELECT_ATTR_RSSI;
+
+	if (attr[NL80211_BSS_SELECT_ATTR_BAND_PREF]) {
+		bss_select->behaviour = NL80211_BSS_SELECT_ATTR_BAND_PREF;
+		bss_select->param.band_pref =
+			nla_get_u32(attr[NL80211_BSS_SELECT_ATTR_BAND_PREF]);
+		if (!is_band_valid(wiphy, bss_select->param.band_pref))
+			return -EINVAL;
+	}
+
+	if (attr[NL80211_BSS_SELECT_ATTR_RSSI_ADJUST]) {
+		struct nl80211_bss_select_rssi_adjust *adj_param;
+
+		adj_param = nla_data(attr[NL80211_BSS_SELECT_ATTR_RSSI_ADJUST]);
+		bss_select->behaviour = NL80211_BSS_SELECT_ATTR_RSSI_ADJUST;
+		bss_select->param.adjust.band = adj_param->band;
+		bss_select->param.adjust.delta = adj_param->delta;
+		if (!is_band_valid(wiphy, bss_select->param.adjust.band))
+			return -EINVAL;
+	}
+
+	/* user-space did not provide behaviour attribute */
+	if (bss_select->behaviour == __NL80211_BSS_SELECT_ATTR_INVALID)
+		return -EINVAL;
+
+	if (!(wiphy->bss_select_support & BIT(bss_select->behaviour)))
+		return -EINVAL;
+
+	return 0;
+}
+
 static int nl80211_parse_random_mac(struct nlattr **attrs,
 				    u8 *mac_addr, u8 *mac_addr_mask)
 {
@@ -6310,7 +6425,20 @@ static int nl80211_trigger_scan(struct sk_buff *skb, struct genl_info *info)
 	request->no_cck =
 		nla_get_flag(info->attrs[NL80211_ATTR_TX_NO_CCK_RATE]);
 
-	if (info->attrs[NL80211_ATTR_MAC])
+	/* Initial implementation used NL80211_ATTR_MAC to set the specific
+	 * BSSID to scan for. This was problematic because that same attribute
+	 * was already used for another purpose (local random MAC address). The
+	 * NL80211_ATTR_BSSID attribute was added to fix this. For backwards
+	 * compatibility with older userspace components, also use the
+	 * NL80211_ATTR_MAC value here if it can be determined to be used for
+	 * the specific BSSID use case instead of the random MAC address
+	 * (NL80211_ATTR_SCAN_FLAGS is used to enable random MAC address use).
+	 */
+	if (info->attrs[NL80211_ATTR_BSSID])
+		memcpy(request->bssid,
+		       nla_data(info->attrs[NL80211_ATTR_BSSID]), ETH_ALEN);
+	else if (!(request->flags & NL80211_SCAN_FLAG_RANDOM_ADDR) &&
+		 info->attrs[NL80211_ATTR_MAC])
 		memcpy(request->bssid, nla_data(info->attrs[NL80211_ATTR_MAC]),
 		       ETH_ALEN);
 	else
@@ -6529,6 +6657,12 @@ nl80211_parse_sched_scan(struct wiphy *wiphy, struct wireless_dev *wdev,
 	if (!n_plans || n_plans > wiphy->max_sched_scan_plans)
 		return ERR_PTR(-EINVAL);
 
+	if (!wiphy_ext_feature_isset(
+		    wiphy, NL80211_EXT_FEATURE_SCHED_SCAN_RELATIVE_RSSI) &&
+	    (attrs[NL80211_ATTR_SCHED_SCAN_RELATIVE_RSSI] ||
+	     attrs[NL80211_ATTR_SCHED_SCAN_RSSI_ADJUST]))
+		return ERR_PTR(-EINVAL);
+
 	request = kzalloc(sizeof(*request)
 			+ sizeof(*request->ssids) * n_ssids
 			+ sizeof(*request->match_sets) * n_match_sets
@@ -6733,6 +6867,26 @@ nl80211_parse_sched_scan(struct wiphy *wiphy, struct wireless_dev *wdev,
 	if (attrs[NL80211_ATTR_SCHED_SCAN_DELAY])
 		request->delay =
 			nla_get_u32(attrs[NL80211_ATTR_SCHED_SCAN_DELAY]);
+
+	if (attrs[NL80211_ATTR_SCHED_SCAN_RELATIVE_RSSI]) {
+		request->relative_rssi = nla_get_s8(
+			attrs[NL80211_ATTR_SCHED_SCAN_RELATIVE_RSSI]);
+		request->relative_rssi_set = true;
+	}
+
+	if (request->relative_rssi_set &&
+	    attrs[NL80211_ATTR_SCHED_SCAN_RSSI_ADJUST]) {
+		struct nl80211_bss_select_rssi_adjust *rssi_adjust;
+
+		rssi_adjust = nla_data(
+			attrs[NL80211_ATTR_SCHED_SCAN_RSSI_ADJUST]);
+		request->rssi_adjust.band = rssi_adjust->band;
+		request->rssi_adjust.delta = rssi_adjust->delta;
+		if (!is_band_valid(wiphy, request->rssi_adjust.band)) {
+			err = -EINVAL;
+			goto out_free;
+		}
+	}
 
 	err = nl80211_parse_sched_scan_plans(wiphy, n_plans, request, attrs);
 	if (err)
@@ -8323,12 +8477,58 @@ static int nl80211_connect(struct sk_buff *skb, struct genl_info *info)
 		return -EOPNOTSUPP;
 	}
 
+	if (info->attrs[NL80211_ATTR_BSS_SELECT]) {
+		/* bss selection makes no sense if bssid is set */
+		if (connect.bssid) {
+			kzfree(connkeys);
+			return -EINVAL;
+		}
+
+		err = parse_bss_select(info->attrs[NL80211_ATTR_BSS_SELECT],
+				       wiphy, &connect.bss_select);
+		if (err) {
+			kzfree(connkeys);
+			return err;
+		}
+	}
+
 	wdev_lock(dev->ieee80211_ptr);
 	err = cfg80211_connect(rdev, dev, &connect, connkeys, NULL);
 	wdev_unlock(dev->ieee80211_ptr);
 	if (err)
 		kzfree(connkeys);
 	return err;
+}
+
+static int nl80211_update_connect_params(struct sk_buff *skb,
+					 struct genl_info *info)
+{
+	struct cfg80211_connect_params connect = {};
+	struct cfg80211_registered_device *rdev = info->user_ptr[0];
+	struct net_device *dev = info->user_ptr[1];
+	struct wireless_dev *wdev = dev->ieee80211_ptr;
+	u32 changed = 0;
+	int ret;
+
+	if (!rdev->ops->update_connect_params)
+		return -EOPNOTSUPP;
+
+	if (info->attrs[NL80211_ATTR_IE]) {
+		if (!is_valid_ie_attr(info->attrs[NL80211_ATTR_IE]))
+			return -EINVAL;
+		connect.ie = nla_data(info->attrs[NL80211_ATTR_IE]);
+		connect.ie_len = nla_len(info->attrs[NL80211_ATTR_IE]);
+		changed |= UPDATE_ASSOC_IES;
+	}
+
+	wdev_lock(dev->ieee80211_ptr);
+	if (!wdev->current_bss)
+		ret = -ENOLINK;
+	else
+		ret = rdev_update_connect_params(rdev, dev, &connect, changed);
+	wdev_unlock(dev->ieee80211_ptr);
+
+	return ret;
 }
 
 static int nl80211_disconnect(struct sk_buff *skb, struct genl_info *info)
@@ -9068,6 +9268,17 @@ static int nl80211_join_mesh(struct sk_buff *skb, struct genl_info *info)
 			return err;
 	}
 
+	if (info->attrs[NL80211_ATTR_TX_RATES] && setup.chandef.chan != NULL) {
+		err = nl80211_parse_tx_bitrate_mask(info, &setup.beacon_rate);
+		if (err)
+			return err;
+
+		err = validate_beacon_tx_rate(rdev, setup.chandef.chan->band,
+					      &setup.beacon_rate);
+		if (err)
+			return err;
+	}
+
 	return cfg80211_join_mesh(rdev, dev, &setup, &cfg);
 }
 
@@ -9176,6 +9387,20 @@ static int nl80211_send_wowlan_nd(struct sk_buff *msg,
 
 	if (nla_put_u32(msg, NL80211_ATTR_SCHED_SCAN_DELAY, req->delay))
 		return -ENOBUFS;
+
+	if (req->relative_rssi_set) {
+		struct nl80211_bss_select_rssi_adjust rssi_adjust;
+
+		if (nla_put_s8(msg, NL80211_ATTR_SCHED_SCAN_RELATIVE_RSSI,
+			       req->relative_rssi))
+			return -ENOBUFS;
+
+		rssi_adjust.band = req->rssi_adjust.band;
+		rssi_adjust.delta = req->rssi_adjust.delta;
+		if (nla_put(msg, NL80211_ATTR_SCHED_SCAN_RSSI_ADJUST,
+			    sizeof(rssi_adjust), &rssi_adjust))
+			return -ENOBUFS;
+	}
 
 	freqs = nla_nest_start(msg, NL80211_ATTR_SCAN_FREQUENCIES);
 	if (!freqs)
@@ -11202,6 +11427,14 @@ static const struct genl_ops nl80211_ops[] = {
 	{
 		.cmd = NL80211_CMD_CONNECT,
 		.doit = nl80211_connect,
+		.policy = nl80211_policy,
+		.flags = GENL_ADMIN_PERM,
+		.internal_flags = NL80211_FLAG_NEED_NETDEV_UP |
+				  NL80211_FLAG_NEED_RTNL,
+	},
+	{
+		.cmd = NL80211_CMD_UPDATE_CONNECT_PARAMS,
+		.doit = nl80211_update_connect_params,
 		.policy = nl80211_policy,
 		.flags = GENL_ADMIN_PERM,
 		.internal_flags = NL80211_FLAG_NEED_NETDEV_UP |

@@ -71,8 +71,8 @@ typedef enum p61_access_state{
     P61_STATE_JCP_DWNLD = 0x8000,	/* JCOP downlad in progress */	
 	P61_STATE_SPI_SVDD_SYNC_START = 0x0001, /*ESE_VDD Low req by SPI*/
 	P61_STATE_SPI_SVDD_SYNC_END = 0x0002, /*ESE_VDD is Low by SPI*/
-	P61_STATE_DWP_SVDD_SYNC_START = 0x0003, /*ESE_VDD  Low req by Nfc*/
-	P61_STATE_DWP_SVDD_SYNC_END = 0x0004, /*ESE_VDD is Low by Nfc*/
+	P61_STATE_DWP_SVDD_SYNC_START = 0x0004, /*ESE_VDD  Low req by Nfc*/
+	P61_STATE_DWP_SVDD_SYNC_END = 0x0008, /*ESE_VDD is Low by Nfc*/
 }p61_access_state_t;
 
 typedef enum jcop_dwnld_state{

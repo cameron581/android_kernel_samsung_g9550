@@ -102,11 +102,22 @@ struct {
 	int octa_id;
 	struct related_light rlight;
 } light_coef_predefine_table[COEF_MAX] = {
-	/* version, octa, dgf, r, g, b, c, ct, ct offset, th_h, th_l, sum_crc */
-	{170131, ID_UTYPE,
-		{2800, -30, -80, -320, 1000, 1198, 1418, 2400, 1600, 700, 10686}},
-	{170131, ID_BLACK,
-		{2800, -30, -80, -320, 1000, 1198, 1418, 2400, 1600, 700, 10686}},
+#if defined(CONFIG_SEC_CRUISERLTE_PROJECT)
+	{170510, ID_UTYPE,
+		{2250, -120, -270, -140, 1220, 1449, 1474, 2100, 900, 600, 9463}},
+	{170510, ID_BLACK,
+		{2250, -120, -270, -140, 1220, 1449, 1474, 2100, 900, 600, 9463}},
+#elif defined(CONFIG_SEC_GREATQLTE_PROJECT)
+	{170609, ID_UTYPE,
+		{2266, -170, 80, -290, 1000, 1389, 1372, 2300, 1000, 550, 9497}},
+	{170609, ID_BLACK,
+		{2266, -170, 80, -290, 1000, 1389, 1372, 2300, 1000, 550, 9497}},
+#else
+	{170427, ID_UTYPE,
+		{2410, -35, -55, -275, 1000, 1198, 1418, 2100, 900, 700, 9361}},
+	{170427, ID_BLACK,
+		{2410, -35, -55, -275, 1000, 1198, 1418, 2100, 900, 700, 9361}},
+#endif
 };
 
 static char *tmd90x_strtok_first_dot(char *str)
@@ -396,7 +407,7 @@ void hidden_hole_data_read(struct adsp_data *data)
 	filp_close(hole_filp, current->files);
 	set_fs(old_fs);
 
-	iRet = sscanf(light_values, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+	iRet = sscanf(light_values, "%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d",
 		&rlight.d_factor, &rlight.r_coef, &rlight.g_coef,
 		&rlight.b_coef, &rlight.c_coef, &rlight.ct_coef,
 		&rlight.ct_offset, &rlight.th_high, &rlight.th_low,
@@ -499,7 +510,7 @@ static int tmd490x_hh_check_crc(void)
 		filp_close(hole_filp, current->files);
 		set_fs(old_fs);
 
-		iRet = sscanf(light_values, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+		iRet = sscanf(light_values, "%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d",
 			&message.d_factor, &message.r_coef, &message.g_coef,
 			&message.b_coef, &message.c_coef, &message.ct_coef,
 			&message.ct_offset, &message.th_high, &message.th_low,
@@ -640,7 +651,7 @@ static ssize_t tmd490x_hh_write_all_data_store(struct device *dev,
 	int iRet = 0, octa_id = 0;
 	char light_values[COEF_VALUES_LEN] = {0, };
 
-	iRet = sscanf(buf, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+	iRet = sscanf(buf, "%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d,%10d",
 		&octa_id, &message.d_factor, &message.r_coef, &message.g_coef,
 		&message.b_coef, &message.c_coef, &message.ct_coef,
 		&message.ct_offset, &message.th_high, &message.th_low,
@@ -779,7 +790,7 @@ static ssize_t tmd490x_hh_ext_prox_th_store(struct device *dev,
 {
 	int threshold = 0;
 	int win_type;
-	
+
 	if (kstrtoint(buf, 10, &threshold)) {
 		pr_err("[FACTORY] %s: kstrtoint fail\n", __func__);
 		return size;
@@ -790,11 +801,11 @@ static ssize_t tmd490x_hh_ext_prox_th_store(struct device *dev,
 		pr_err("[FACTORY] %s: win_type read fail\n", __func__);
 		return size;
 	}
-		
+
 	pr_info("[FACTORY] %s: win_type:%d, thd:%d\n",
 		__func__, win_type, threshold);
 	light_coef_predefine_table[win_type].rlight.irisprox_th = threshold;
-		
+
 	return size;
 }
 

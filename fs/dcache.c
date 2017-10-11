@@ -581,7 +581,6 @@ static struct dentry *dentry_kill(struct dentry *dentry)
 
 failed:
 	spin_unlock(&dentry->d_lock);
-	cpu_relax();
 	return dentry; /* try again with same dentry */
 }
 
@@ -755,6 +754,8 @@ void dput(struct dentry *dentry)
 		return;
 
 repeat:
+	might_sleep();
+
 	rcu_read_lock();
 	if (likely(fast_dput(dentry))) {
 		rcu_read_unlock();
@@ -786,8 +787,10 @@ repeat:
 
 kill_it:
 	dentry = dentry_kill(dentry);
-	if (dentry)
+	if (dentry) {
+		cond_resched();
 		goto repeat;
+	}
 }
 EXPORT_SYMBOL(dput);
 
@@ -1477,7 +1480,7 @@ static void check_and_drop(void *_data)
 {
 	struct detach_data *data = _data;
 
-	if (!data->mountpoint && !data->select.found)
+	if (!data->mountpoint && list_empty(&data->select.dispose))
 		__d_drop(data->select.start);
 }
 
@@ -1519,17 +1522,15 @@ void d_invalidate(struct dentry *dentry)
 
 		d_walk(dentry, &data, detach_and_collect, check_and_drop);
 
-		if (data.select.found)
+		if (!list_empty(&data.select.dispose))
 			shrink_dentry_list(&data.select.dispose);
+		else if (!data.mountpoint)
+			return;
 
 		if (data.mountpoint) {
 			detach_mounts(data.mountpoint);
 			dput(data.mountpoint);
 		}
-
-		if (!data.mountpoint && !data.select.found)
-			break;
-
 		cond_resched();
 	}
 }

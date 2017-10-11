@@ -2,7 +2,6 @@
 # Samsung Common file.
 #
 
-
 obj-y += ss_dsi_panel_sysfs.o
 obj-y += ss_dsi_panel_debug.o
 obj-y += ss_dsi_panel_common.o
@@ -26,3 +25,9 @@ obj-$(CONFIG_PANEL_S6E3HA6_AMB577MQ01_WQHD) += S6E3HA6_AMB577MQ01/
 
 # DREAM2 DSC panel
 obj-$(CONFIG_PANEL_S6E3HA6_AMS622MR01_WQHD) += S6E3HA6_AMS622MR01/
+
+# GREAT DSC panel
+obj-$(CONFIG_PANEL_S6E3HA6_AMB632NF01_WQHD) += S6E3HA6_AMB632NF01/
+
+# KELLY panel
+obj-$(CONFIG_PANEL_S6E3FA5_AMS420MS01_FHD) += S6E3FA5_AMS420MS01/

@@ -34,6 +34,11 @@
 #define MAX_NUMBER_OF_STEPS 47
 #define MAX_REGULATOR 5
 
+#define MAX_REAR_SENSOR_FW_INFO  (48)
+#define MAX_COMPANION_FW_INFO    (64)
+#define MAX_OIS_FW_INFO	         (48)
+#define MAX_REAR_CAMFW_ALL       (1024)
+
 /*msm_flash_query_data_t query types*/
 #define FLASH_QUERY_CURRENT 1
 
@@ -417,6 +422,15 @@ struct msm_ir_cut_cfg_data_t {
 	enum msm_ir_cut_cfg_type_t cfg_type;
 };
 
+struct msm_phone_fw_data_t {
+        uint16_t *valid_sensor_fw_info;
+        uint16_t *valid_companion_fw_info;
+        uint16_t *valid_ois_fw_info;
+        char *rear_sensor_fw_all;
+        char *companion_fw_all;
+        char *ois_fw_all;
+};
+
 struct msm_eeprom_cfg_data {
 	enum eeprom_cfg_type_t cfgtype;
 	uint16_t is_supported;
@@ -471,6 +485,9 @@ enum msm_sensor_cfg_type_t {
 #if 1 //defined(CONFIG_SENSOR_RETENTION)
 	CFG_SET_SENSOR_RETENTION,
 #endif
+	CFG_SET_SENSOR_SOF_FREEZE_NOTI,
+	CFG_SET_SENSOR_STREAM_ON_NOTI,
+	CFG_SET_SENSOR_STREAM_OFF_NOTI,
 	CFG_MATCH_ID,
 };
 
@@ -483,6 +500,8 @@ enum msm_actuator_cfg_type_t {
 	CFG_ACTUATOR_POWERDOWN,
 	CFG_ACTUATOR_POWERUP,
 	CFG_ACTUATOR_INIT,
+	CFG_ACTUATOR_SLEEP,
+	CFG_ACTUATOR_ACTIVE,
 };
 
 struct msm_ois_opcode {
@@ -496,6 +515,7 @@ enum msm_ois_cfg_type_t {
 	CFG_OIS_INIT,
 	CFG_OIS_POWERDOWN,
 	CFG_OIS_POWERUP,
+	CFG_OIS_SUSPEND_MODE,
 	CFG_OIS_CONTROL,
 	CFG_OIS_I2C_WRITE_SEQ_TABLE,
 	CFG_OIS_SET_MODE,
@@ -506,6 +526,7 @@ enum msm_ois_cfg_type_t {
 	CFG_OIS_GET_FW_STATUS,
 	CFG_OIS_FW_UPDATE,
 	CFG_OIS_SET_GGFADE,
+	CFG_OIS_SET_IMAGE_SHIFT_CAL,
 };
 
 enum msm_ois_cfg_download_type_t {
@@ -621,6 +642,7 @@ struct msm_ois_cfg_data {
 	int cfgtype;
 	uint16_t set_value;
 	uint8_t *version;
+	uint8_t *image_shift_cal;
 	struct msm_ois_cal_info_t *ois_cal_info;
 	union {
 		struct msm_ois_set_info_t set_info;
@@ -761,5 +783,9 @@ struct sensor_init_cfg_data {
 
 #define VIDIOC_MSM_IR_CUT_CFG \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 15, struct msm_ir_cut_cfg_data_t)
+
+#define VIDIOC_MSM_PHONE_FW_INFO \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 17, struct msm_phone_fw_data_t)
+
 
 #endif

@@ -2,6 +2,10 @@
 # Makefile for the kernel software RAID and LVM drivers.
 #
 
+ifeq ($(SEC_BUILD_CONF_DMV_ALTA),true)
+EXTRA_CFLAGS += -DDMV_ALTA=true
+EXTRA_CFLAGS += -DDMV_ALTA_PROF=true
+endif
 dm-mod-y	+= dm.o dm-table.o dm-target.o dm-linear.o dm-stripe.o \
 		   dm-ioctl.o dm-io.o dm-kcopyd.o dm-sysfs.o dm-stats.o
 dm-multipath-y	+= dm-path-selector.o dm-mpath.o
@@ -62,6 +66,7 @@ obj-$(CONFIG_DM_CACHE_CLEANER)	+= dm-cache-cleaner.o
 obj-$(CONFIG_DM_ERA)		+= dm-era.o
 obj-$(CONFIG_DM_LOG_WRITES)	+= dm-log-writes.o
 obj-$(CONFIG_DM_REQ_CRYPT)	+= dm-req-crypt.o
+obj-$(CONFIG_DM_ANDROID_VERITY) += dm-android-verity.o
 
 ifeq ($(CONFIG_DM_UEVENT),y)
 dm-mod-objs			+= dm-uevent.o

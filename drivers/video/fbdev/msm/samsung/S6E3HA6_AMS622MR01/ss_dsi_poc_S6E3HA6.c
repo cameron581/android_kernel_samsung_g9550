@@ -196,9 +196,12 @@ static int ss_poc_read(struct samsung_display_driver_data *vdd, u8 *buf, u32 rea
 		poc_tx_read->cmds[0].payload[7] = (pos & 0x00FF00) >> 8;
 		poc_tx_read->cmds[0].payload[8] = pos & 0x0000FF;
 
+		mutex_lock(&vdd->vdd_mdss_direct_cmdlist_lock);
 		mdss_samsung_send_cmd(vdd->ctrl_dsi[DISPLAY_1], TX_POC_READ);
 		usleep_range(200, 200);
 		mdss_samsung_panel_data_read(vdd->ctrl_dsi[DISPLAY_1], poc_rx_read, buf + pos, LEVEL_KEY_NONE);
+		mutex_unlock(&vdd->vdd_mdss_direct_cmdlist_lock);
+
 		LCD_DEBUG("[MDSS] [IOCTRL] pos = %d, 0x%x\n", pos, buf[pos]);
 
 		if (!(pos % DEBUG_POC_CNT))
@@ -515,16 +518,19 @@ static const struct file_operations poc_fops = {
 };
 
 #ifdef CONFIG_DISPLAY_USE_INFO
-#define NO_POC_CNT_FILE_VAL	(-1)
-#define MAX_POC_FILE_SIZE	(128)
+enum {
+	EPOCEFS_NOENT = 1,		/* No such file or directory */
+	EPOCEFS_EMPTY = 2,		/* Empty file */
+	EPOCEFS_READ = 3,		/* Read failed */
+};
+
 static int read_user_poc_file(char *file_path)
 {
 	struct file *filp = NULL;
 	mm_segment_t fs_org;
-	char buf[MAX_POC_FILE_SIZE];
+	size_t file_size;
 	int val;
 	int ret;
-	size_t file_size;
 
 	fs_org = get_fs();
 	set_fs(KERNEL_DS);
@@ -533,37 +539,29 @@ static int read_user_poc_file(char *file_path)
 	if (IS_ERR(filp)) {
 		ret = PTR_ERR(filp);
 		LCD_ERR("fail to open %s (%d)\n", file_path, ret);
-
-		set_fs(fs_org);
-
-		val = NO_POC_CNT_FILE_VAL;
-		goto end;
+		val = -EPOCEFS_NOENT;
+		goto err_open;
 	}
 
 	file_size = (size_t ) filp->f_path.dentry->d_inode->i_size;
-	if (file_size == 0 || file_size > MAX_POC_FILE_SIZE) {
-		LCD_ERR("%s file size is invalid(%zu)\n", file_path, file_size);
-
-		filp_close(filp, NULL);
-		set_fs(fs_org);
-
-		val = NO_POC_CNT_FILE_VAL;
-		goto end;
+	if (file_size == 0) {
+		LCD_ERR("%s file size is zero\n", file_path);
+		val = -EPOCEFS_EMPTY;
+		goto err_size;
 	}
 
-	ret = vfs_read(filp, (char __user *)buf, file_size, &filp->f_pos);
+	ret = vfs_read(filp, (char __user *)&val, 4, &filp->f_pos);
 	if (ret < 0) {
 		LCD_ERR("fail to read %s (%d)\n", file_path, ret);
-		val = NO_POC_CNT_FILE_VAL;
+		val = -EPOCEFS_READ;
 	}
 
+err_size:
 	filp_close(filp, NULL);
+err_open:
 	set_fs(fs_org);
 
-	val = simple_strtol(buf, NULL, 10);
-
-end:
-	LCD_INFO("val=%d", val);
+	LCD_INFO("val=%d, fsize=%zu\n", val, file_size);
 	return val;
 }
 
@@ -591,10 +589,12 @@ static int poc_dpui_notifier_callback(struct notifier_block *self,
 	total_fail_cnt = read_user_poc_file("/efs/etc/poc/totalfailcount");
 	size = snprintf(tbuf, MAX_DPUI_VAL_LEN, "%d", total_fail_cnt);
 	set_dpui_field(DPUI_KEY_PNPOCF, tbuf, size);
+	LCD_INFO("total_fail_cnt=%d\n", total_fail_cnt);
 
 	total_try_cnt = read_user_poc_file("/efs/etc/poc/totaltrycount");
 	size = snprintf(tbuf, MAX_DPUI_VAL_LEN, "%d", total_try_cnt);
 	set_dpui_field(DPUI_KEY_PNPOCT, tbuf, size);
+	LCD_INFO("total_try_cnt=%d\n", total_try_cnt);
 
 	return 0;
 }

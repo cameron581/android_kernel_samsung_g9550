@@ -22,16 +22,12 @@
 #include <linux/switch.h>
 #include <linux/of_platform.h>
 #include <linux/msm_ext_display.h>
+#ifdef CONFIG_SEC_DISPLAYPORT
+#include <linux/dp_logger.h>
+#endif
 
 #include "mdss_hdmi_util.h"
 #include "mdss_fb.h"
-
-#ifdef CONFIG_SEC_DISPLAYPORT
-#ifdef pr_debug
-#undef pr_debug
-#define pr_debug	pr_info
-#endif
-#endif
 
 struct msm_ext_disp_list {
 	struct msm_ext_disp_init_data *data;
@@ -405,7 +401,7 @@ static int msm_ext_disp_process_display(struct msm_ext_disp *ext_disp,
 	}
 
 	reinit_completion(&ext_disp->hpd_comp);
-	ret = wait_for_completion_timeout(&ext_disp->hpd_comp, HZ * 2);
+	ret = wait_for_completion_timeout(&ext_disp->hpd_comp, HZ * 5);
 	if (!ret) {
 		pr_err("display timeout\n");
 		ret = -EINVAL;

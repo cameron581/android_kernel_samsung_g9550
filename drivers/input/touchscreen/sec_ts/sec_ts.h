@@ -389,8 +389,7 @@ enum grip_set_data {
 
 typedef enum {
 	SEC_TS_STATE_POWER_OFF = 0,
-	SEC_TS_STATE_LPM_SUSPEND,
-	SEC_TS_STATE_LPM_RESUME,
+	SEC_TS_STATE_LPM,
 	SEC_TS_STATE_POWER_ON
 } TOUCH_POWER_MODE;
 
@@ -828,6 +827,8 @@ void sec_ts_run_rawdata_all(struct sec_ts_data *ts);
 int execute_selftest(struct sec_ts_data *ts, bool save_result);
 int sec_ts_read_raw_data(struct sec_ts_data *ts,
 		struct sec_cmd_data *sec, struct sec_ts_test_mode *mode);
+int read_pressure_data(struct sec_ts_data *ts, u8 type, short *value);
+void sec_ts_reinit(struct sec_ts_data *ts);
 
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
 int sec_ts_raw_device_init(struct sec_ts_data *ts);

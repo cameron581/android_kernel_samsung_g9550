@@ -63,6 +63,11 @@ ssize_t	tima_read(struct file *filep, char __user *buf, size_t size, loff_t *off
 	}
 #ifdef CONFIG_TIMA_RKP
 	else if( !strcmp(filep->f_path.dentry->d_iname, "tima_debug_rkp_log")) {
+		if (*offset >= TIMA_DEBUG_LOG_SIZE) {
+			return -EINVAL;
+		} else if (*offset + size > TIMA_DEBUG_LOG_SIZE) {
+			size = (TIMA_DEBUG_LOG_SIZE) - *offset;
+		}
 		tima_log_addr = tima_debug_rkp_log_addr;
 		if (copy_to_user(buf, (const char *)tima_log_addr + (*offset), size)) {
 			printk(KERN_ERR"Copy to user failed\n");
@@ -73,6 +78,9 @@ ssize_t	tima_read(struct file *filep, char __user *buf, size_t size, loff_t *off
 		}
 	}
 	else if( !strcmp(filep->f_path.dentry->d_iname, "tima_secure_rkp_log")) {
+		if (*offset >= TIMA_SEC_LOG_SIZE) {
+			return -EINVAL;
+		} 
 		tima_log_addr = tima_secure_rkp_log_addr;
 		/* First check is to get rid of integer overflow exploits */
 		if (size > TIMA_SEC_LOG_SIZE || (*offset) + size > TIMA_SEC_LOG_SIZE) {

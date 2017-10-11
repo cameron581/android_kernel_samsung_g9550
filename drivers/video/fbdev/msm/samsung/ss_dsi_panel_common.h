@@ -113,6 +113,9 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 /* MAX ESD Recovery gpio */
 #define MAX_ESD_GPIO 2
 
+/* Panel Recovery Trial Count Max */
+#define MAX_PANEL_RECOVERY_TRIALS 5
+
 #define BASIC_FB_PANLE_TYPE 0x01
 #define NEW_FB_PANLE_TYPE 0x00
 #define OTHERLINE_WORKQ_DEALY 900 /*ms*/
@@ -215,6 +218,8 @@ enum mipi_samsung_tx_cmd_list {
 	TX_IRC,
 	TX_IRC_SUBDIVISION,
 	TX_IRC_OFF,
+	TX_MICRO_SHORT_TEST_ON,
+	TX_MICRO_SHORT_TEST_OFF,
 	/* START POC CMDS */
 	TX_POC_CMD_START,
 	TX_POC_WRITE_1BYTE,
@@ -232,6 +237,14 @@ enum mipi_samsung_tx_cmd_list {
 	TX_POC_REG_READ_POS,
 	TX_POC_CMD_END,
 	/* END POC CMDS */
+	TX_GCT_ENTER,
+	TX_GCT_VDDM_CTRL,
+	TX_GCT_TEST_PATTERN_1,
+	TX_GCT_TEST_PATTERN_2,
+	TX_GCT_EXIT,
+	TX_DDI_RAM_IMG_DATA,
+	TX_GRAY_SPOT_TEST_ON,
+	TX_GRAY_SPOT_TEST_OFF,
 	TX_CMD_MAX,
 };
 
@@ -263,6 +276,7 @@ enum mipi_samsung_rx_cmd_list {
 	RX_POC_READ,
 	RX_POC_STATUS,
 	RX_POC_CHECKSUM,
+	RX_GCT_CHECKSUM,
 	RX_CMD_MAX,
 };
 
@@ -320,6 +334,9 @@ enum {
 	HALL_IC_UNDEFINED,
 };
 
+#define LCD_FLIP_NOT_REFRESH	BIT(8)
+
+
 enum IRC_MODE {
 	IRC_LRU_MODE = 0x0D,
 	IRC_CLIP_MODE = 0x1D,
@@ -327,6 +344,18 @@ enum IRC_MODE {
 	IRC_CLEAR_COLOR_MODE = 0x3D,
 	IRC_MODERATO_MODE = 0x6D,
 	IRC_MAX_MODE = IRC_MODERATO_MODE + 1,
+};
+
+enum {
+	VDDM_ORG = 0,
+	VDDM_LV,
+	VDDM_HV,
+	MAX_VDDM,
+};
+
+enum {
+	MIPI_TX_TYPE_GRAM,
+	MIPI_TX_TYPE_SIDERAM,
 };
 
 struct panel_irc_info {
@@ -465,8 +494,6 @@ struct display_status {
 	int elvss_value1;
 	int elvss_value2;
 	int disp_on_pre;
-	int hall_ic_status;
-	int hall_ic_mode_change_trigger;
 };
 
 struct hmt_status {
@@ -623,6 +650,10 @@ struct panel_func {
 	void (*samsung_set_copr_sum)(struct samsung_display_driver_data *vdd);
 	void (*samsung_copr_enable)(struct samsung_display_driver_data *vdd, int enable);
 	int (*samsung_poc_ctrl)(struct samsung_display_driver_data *vdd, u32 cmd);
+
+	/* Gram Checksum Test */
+	int (*samsung_gct_read)(struct samsung_display_driver_data *vdd);
+	int (*samsung_gct_write)(struct samsung_display_driver_data *vdd);
 };
 
 struct samsung_register_info {
@@ -750,6 +781,12 @@ enum poc_state {
 	MAX_POC_STATE,
 };
 
+enum mdss_cpufreq_cluster {
+	CPUFREQ_CLUSTER_BIG,
+	CPUFREQ_CLUSTER_LITTLE,
+	CPUFREQ_CLUSTER_ALL,
+};
+
 #define IOC_GET_POC_STATUS	_IOR('A', 100, __u32)		/* 0:NONE, 1:ERASED, 2:WROTE, 3:READ */
 #define IOC_GET_POC_CHKSUM	_IOR('A', 101, __u32)		/* 0:CHKSUM ERROR, 1:CHKSUM SUCCESS */
 #define IOC_GET_POC_CSDATA	_IOR('A', 102, __u32)		/* CHKSUM DATA 4 Bytes */
@@ -782,19 +819,42 @@ struct POC {
 	u32 rsize;
 };
 
+#define GCT_RES_CHECKSUM_PASS	1
+#define GCT_RES_CHECKSUM_NG	0
+#define GCT_RES_CHECKSUM_OFF	-2
+
+struct gct_pattern {
+	u8 *buf;
+	int size;
+};
+
+struct gram_checksum_test {
+	struct gct_pattern pat1;
+	struct gct_pattern pat2;
+	bool is_support;
+	int on;
+	u8 checksum[4];
+};
+
+struct ss_exclusive_mipi_tx {
+	struct mutex ex_tx_lock;
+	int enable; /* This shuold be set in ex_tx_lock lock */
+	wait_queue_head_t ex_tx_waitq;
+};
+
 struct samsung_display_driver_data {
 	/*
 	*	PANEL COMMON DATA
 	*/
 	struct mutex vdd_lock;
 	struct mutex vdd_blank_unblank_lock;
-	struct mutex vdd_hall_ic_blank_unblank_lock;
-	struct mutex vdd_hall_ic_lock;
 	struct mutex vdd_panel_lpm_lock;
 	struct mutex vdd_act_clock_lock;
 	struct mutex vdd_poc_operation_lock;
 	struct mutex vdd_mdss_direct_cmdlist_lock;
+	struct mutex vdd_cpufreq_lock;
 	struct samsung_display_debug_data *debug_data;
+	struct ss_exclusive_mipi_tx exclusive_tx;
 
 	int vdd_blank_mode[SUPPORT_PANEL_COUNT];
 	int vdd_blank_mode_done[SUPPORT_PANEL_COUNT];
@@ -806,9 +866,6 @@ struct samsung_display_driver_data {
 	int support_mdnie_trans_dimming;
 
 	bool is_factory_mode;
-
-	int support_hall_ic;
-	struct notifier_block hall_ic_notifier_display;
 
 	int panel_attach_status; /* 0bit->DSI0 1bit->DSI1 */
 
@@ -934,6 +991,9 @@ struct samsung_display_driver_data {
 	/* ESD */
 	struct esd_recovery esd_recovery;
 
+	/* Panel Recovery Count */
+	int panel_recovery_cnt;
+
 	/*Image dump*/
 	struct workqueue_struct *image_dump_workqueue;
 	struct work_struct image_dump_work;
@@ -980,6 +1040,7 @@ struct samsung_display_driver_data {
 	int cover_control;
 
 	int select_panel_gpio;
+	bool select_panel_use_expander_gpio;
 
 	/* Power Control for LPM */
 	bool lpm_power_control;
@@ -1010,6 +1071,22 @@ struct samsung_display_driver_data {
 	int xtalk_mode;
 
 	int poc_operation;
+
+	struct gram_checksum_test gct;
+
+	/* hall ic */
+	bool support_hall_ic;
+        int hall_ic_status;
+	int hall_ic_mode_change_trigger;
+	bool hall_ic_status_pending;
+	bool hall_ic_status_unhandled;
+	struct mutex vdd_hall_ic_blank_unblank_lock;
+	struct mutex vdd_hall_ic_lock;
+	struct notifier_block hall_ic_notifier_display;
+	bool lcd_flip_not_refresh;
+	u32 lcd_flip_delay_ms;
+	struct delayed_work delay_disp_on_work;
+
 };
 
 /*SPI INTERFACE*/
@@ -1034,7 +1111,13 @@ struct ss_spi_private {
 /* COMMON FUNCTION */
 void mdss_samsung_panel_init(struct device_node *np, struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 void mdss_samsung_dsi_panel_registered(struct mdss_panel_data *pdata);
+void mdss_samsung_set_max_cpufreq(struct samsung_display_driver_data *vdd,
+		int enable, enum mdss_cpufreq_cluster cluster);
+void mdss_samsung_set_exclusive_tx_packet(struct mdss_dsi_ctrl_pdata *ctrl,
+		enum mipi_samsung_tx_cmd_list cmd, int pass);
 int mdss_samsung_send_cmd(struct mdss_dsi_ctrl_pdata *ctrl, enum mipi_samsung_tx_cmd_list cmd);
+int mdss_samsung_write_ddi_ram(struct mdss_dsi_ctrl_pdata *ctrl,
+				int target, u8 *buffer, int len);
 int mdss_samsung_read_nv_mem(struct mdss_dsi_ctrl_pdata *ctrl, struct dsi_panel_cmds *cmds, unsigned char *buffer, int level_key);
 void mdss_samsung_panel_parse_dt(struct device_node *np, struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 int mdss_samsung_panel_on_pre(struct mdss_panel_data *pdata);

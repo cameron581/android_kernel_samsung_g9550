@@ -10,6 +10,7 @@ extern int com_to_open_with_vbus(muic_data_t *pmuic);
 extern int com_to_usb_ap(muic_data_t *pmuic);
 extern int com_to_usb_cp(muic_data_t *pmuic);
 extern int com_to_audio(muic_data_t *pmuic);
+extern int cable_redetection(muic_data_t *pmuic);
 extern int switch_to_ap_usb(muic_data_t *pmuic);
 extern int switch_to_ap_uart(muic_data_t *pmuic);
 extern int switch_to_cp_uart(muic_data_t *pmuic);

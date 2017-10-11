@@ -528,13 +528,21 @@ ssize_t s2mpb02_store(struct device *dev,
 		onoff = S2MPB02_TORCH_OUT_I_40MA;
 	} else if (onoff == 1002) {
 		// level 2 (Flashlight level 2)
+#if defined(CONFIG_SEC_GREATQLTE_PROJECT)
+		onoff = S2MPB02_TORCH_OUT_I_80MA;
+#else
 		onoff = S2MPB02_TORCH_OUT_I_60MA;
+#endif
 	} else if (onoff == 1003) {
 		// level 3
 		onoff = S2MPB02_TORCH_OUT_I_80MA;
 	} else if (onoff == 1004) {
 		// level 4 (Flashlight level 3)
+#if defined(CONFIG_SEC_GREATQLTE_PROJECT)
+		onoff = S2MPB02_TORCH_OUT_I_100MA;
+#else
 		onoff = S2MPB02_TORCH_OUT_I_80MA;
+#endif
 	} else if (onoff == 1005) {
 		// level 5
 		onoff = S2MPB02_TORCH_OUT_I_120MA;

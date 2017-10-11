@@ -36,6 +36,7 @@ config ARM
 	select HAVE_ARCH_JUMP_LABEL if !XIP_KERNEL && !CPU_ENDIAN_BE32
 	select HAVE_ARCH_KGDB if !CPU_ENDIAN_BE32
 	select HAVE_ARCH_MMAP_RND_BITS if MMU
+	select HAVE_ARCH_HARDENED_USERCOPY
 	select HAVE_ARCH_SECCOMP_FILTER if (AEABI && !OABI_COMPAT)
 	select HAVE_ARCH_TRACEHOOK
 	select HAVE_BPF_JIT
@@ -227,6 +228,9 @@ config NEED_RET_TO_USER
 	bool
 
 config ARCH_MTD_XIP
+	bool
+
+config ARCH_WANT_KMAP_ATOMIC_FLUSH
 	bool
 
 config VECTORS_BASE
@@ -651,6 +655,7 @@ config ARCH_QCOM
 	select SPARSE_IRQ
 	select USE_OF
 	select PINCTRL
+	select ARCH_WANT_KMAP_ATOMIC_FLUSH
 	help
 	  Support for Qualcomm MSM/QSD based systems.  This runs on the
 	  apps processor of the MSM/QSD and depends on a shared memory

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  * Copyright (C) 1994 Martin Schaller
  *
  * 2001 - Documented with DocBook
@@ -219,12 +219,14 @@ static struct mdp_input_layer *__create_layer_list(
 
 		layer->flags = layer32->flags;
 		layer->pipe_ndx = layer32->pipe_ndx;
+		layer->rect_num = layer32->rect_num;
 		layer->horz_deci = layer32->horz_deci;
 		layer->vert_deci = layer32->vert_deci;
 		layer->z_order = layer32->z_order;
 		layer->transp_mask = layer32->transp_mask;
 		layer->bg_color = layer32->bg_color;
 		layer->blend_op = layer32->blend_op;
+		layer->color_space = layer32->color_space;
 		layer->src_rect = layer32->src_rect;
 		layer->dst_rect = layer32->dst_rect;
 		layer->buffer = layer32->buffer;
@@ -312,6 +314,8 @@ static int __compat_atomic_commit(struct fb_info *info, unsigned int cmd,
 		ret = -EFAULT;
 		return ret;
 	}
+
+	memset(&commit, 0, sizeof(struct mdp_layer_commit));
 	__copy_atomic_commit_struct(&commit, &commit32);
 
 	if (commit32.commit_v1.output_layer) {
@@ -935,6 +939,7 @@ static int __to_user_pcc_coeff_v1_7(
 	struct mdp_pcc_data_v1_7_32 pcc_cfg_payload32;
 	struct mdp_pcc_data_v1_7 pcc_cfg_payload;
 
+	memset(&pcc_cfg_payload32, 0, sizeof(pcc_cfg_payload32));
 	if (copy_from_user(&pcc_cfg_payload,
 			   pcc_cfg->cfg_payload,
 			   sizeof(struct mdp_pcc_data_v1_7))) {
@@ -2130,6 +2135,7 @@ static int __to_user_pa_data_v1_7(
 	struct mdp_pa_data_v1_7_32 pa_cfg_payload32;
 	struct mdp_pa_data_v1_7 pa_cfg_payload;
 
+	memset(&pa_cfg_payload32, 0, sizeof(pa_cfg_payload32));
 	if (copy_from_user(&pa_cfg_payload,
 			pa_v2_cfg->cfg_payload,
 			sizeof(pa_cfg_payload))) {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,10 @@
 #include <soc/qcom/memory_dump.h>
 #include <linux/regulator/consumer.h>
 #include <linux/clk.h>
+#include <linux/interrupt.h>
+#include <linux/cpumask.h>
+#include <linux/cpufreq.h>
+#include <linux/sched/core_ctl.h>
 #include "wil_platform.h"
 #include "msm_11ad.h"
 
@@ -33,7 +37,7 @@
 #define WIGIG_DEVICE (0x0310)
 
 #define SMMU_BASE	0x10000000 /* Device address range base */
-#define SMMU_SIZE	0x40000000 /* Device address range size */
+#define SMMU_SIZE	((SZ_1G * 4ULL) - SMMU_BASE)
 
 #define WIGIG_ENABLE_DELAY	50
 #define PM_OPT_SUSPEND (MSM_PCIE_CONFIG_NO_CFG_RESTORE | \
@@ -53,6 +57,8 @@
 
 #define DISABLE_PCIE_L1_MASK 0xFFFFFFFD
 #define PCIE20_CAP_LINKCTRLSTATUS 0x80
+
+#define WIGIG_MIN_CPU_BOOST_KBPS	150000
 
 struct device;
 
@@ -87,6 +93,8 @@ struct msm11ad_ctx {
 
 	/* SMMU */
 	bool use_smmu; /* have SMMU enabled? */
+	int smmu_bypass;
+	int smmu_fast_map;
 	struct dma_iommu_mapping *mapping;
 
 	/* bus frequency scaling */
@@ -111,6 +119,11 @@ struct msm11ad_ctx {
 	struct msm11ad_vreg vddio;
 	struct msm11ad_clk rf_clk3;
 	struct msm11ad_clk rf_clk3_pin;
+
+	/* cpu boost support */
+	bool use_cpu_boost;
+	bool is_cpu_boosted;
+	struct cpumask boost_cpu;
 };
 
 static LIST_HEAD(dev_list);
@@ -596,10 +609,12 @@ static int msm_11ad_smmu_init(struct msm11ad_ctx *ctx)
 {
 	int atomic_ctx = 1;
 	int rc;
-	int bypass_enable = 1;
 
 	if (!ctx->use_smmu)
 		return 0;
+
+	dev_info(ctx->dev, "Initialize SMMU, bypass = %d, fastmap = %d\n",
+		 ctx->smmu_bypass, ctx->smmu_fast_map);
 
 	ctx->mapping = arm_iommu_create_mapping(&platform_bus_type,
 						SMMU_BASE, SMMU_SIZE);
@@ -608,7 +623,6 @@ static int msm_11ad_smmu_init(struct msm11ad_ctx *ctx)
 		dev_err(ctx->dev, "Failed to create IOMMU mapping (%d)\n", rc);
 		return rc;
 	}
-	dev_info(ctx->dev, "IOMMU mapping created: %p\n", ctx->mapping);
 
 	rc = iommu_domain_set_attr(ctx->mapping->domain,
 				   DOMAIN_ATTR_ATOMIC,
@@ -619,13 +633,24 @@ static int msm_11ad_smmu_init(struct msm11ad_ctx *ctx)
 		goto release_mapping;
 	}
 
-	rc = iommu_domain_set_attr(ctx->mapping->domain,
-				   DOMAIN_ATTR_S1_BYPASS,
-				   &bypass_enable);
-	if (rc) {
-		dev_err(ctx->dev, "Set bypass attribute to SMMU failed (%d)\n",
-			rc);
-		goto release_mapping;
+	if (ctx->smmu_bypass) {
+		rc = iommu_domain_set_attr(ctx->mapping->domain,
+					   DOMAIN_ATTR_S1_BYPASS,
+					   &ctx->smmu_bypass);
+		if (rc) {
+			dev_err(ctx->dev, "Set bypass attribute to SMMU failed (%d)\n",
+				rc);
+			goto release_mapping;
+		}
+	} else if (ctx->smmu_fast_map) {
+		rc = iommu_domain_set_attr(ctx->mapping->domain,
+					   DOMAIN_ATTR_FAST,
+					   &ctx->smmu_fast_map);
+		if (rc) {
+			dev_err(ctx->dev, "Set fast attribute to SMMU failed (%d)\n",
+				rc);
+			goto release_mapping;
+		}
 	}
 
 	rc = arm_iommu_attach_device(&ctx->pcidev->dev, ctx->mapping);
@@ -809,6 +834,36 @@ out_rc:
 	return rc;
 }
 
+static void msm_11ad_init_cpu_boost(struct msm11ad_ctx *ctx)
+{
+	unsigned int minfreq = 0, maxfreq = 0, freq;
+	int i, boost_cpu;
+
+	for_each_possible_cpu(i) {
+		freq = cpufreq_quick_get_max(i);
+		if (freq > maxfreq) {
+			maxfreq = freq;
+			boost_cpu = i;
+		}
+		if (!minfreq || freq < minfreq)
+			minfreq = freq;
+	}
+
+	if (minfreq != maxfreq) {
+		/*
+		 * use first big core for boost, to be compatible with WLAN
+		 * which assigns big cores from the last index
+		 */
+		ctx->use_cpu_boost = true;
+		cpumask_clear(&ctx->boost_cpu);
+		cpumask_set_cpu(boost_cpu, &ctx->boost_cpu);
+		dev_info(ctx->dev, "CPU boost: will use core %d\n", boost_cpu);
+	} else {
+		ctx->use_cpu_boost = false;
+		dev_info(ctx->dev, "CPU boost disabled, uniform topology\n");
+	}
+}
+
 static int msm_11ad_probe(struct platform_device *pdev)
 {
 	struct msm11ad_ctx *ctx;
@@ -869,6 +924,9 @@ static int msm_11ad_probe(struct platform_device *pdev)
 	}
 	ctx->use_smmu = of_property_read_bool(of_node, "qcom,smmu-support");
 	ctx->bus_scale = msm_bus_cl_get_pdata(pdev);
+
+	ctx->smmu_bypass = 1;
+	ctx->smmu_fast_map = 0;
 
 	/*== execute ==*/
 	/* turn device on */
@@ -981,6 +1039,8 @@ static int msm_11ad_probe(struct platform_device *pdev)
 		goto out_rc;
 	}
 
+	msm_11ad_init_cpu_boost(ctx);
+
 	/* report */
 	dev_info(ctx->dev, "msm_11ad discovered. %p {\n"
 		 "  gpio_en = %d\n"
@@ -1057,6 +1117,34 @@ static struct platform_driver msm_11ad_driver = {
 };
 module_platform_driver(msm_11ad_driver);
 
+static void msm_11ad_set_boost_affinity(struct msm11ad_ctx *ctx)
+{
+	/*
+	 * There is a very small window where user space can change the
+	 * affinity after we changed it here and before setting the
+	 * NO_BALANCING flag. Retry this several times as a workaround.
+	 */
+	int retries = 5, rc;
+	struct irq_desc *desc;
+
+	while (retries > 0) {
+		irq_modify_status(ctx->pcidev->irq, IRQ_NO_BALANCING, 0);
+		rc = irq_set_affinity_hint(ctx->pcidev->irq, &ctx->boost_cpu);
+		if (rc)
+			dev_warn(ctx->dev,
+				"Failed set affinity, rc=%d\n", rc);
+		irq_modify_status(ctx->pcidev->irq, 0, IRQ_NO_BALANCING);
+		desc = irq_to_desc(ctx->pcidev->irq);
+		if (cpumask_equal(desc->irq_common_data.affinity,
+				  &ctx->boost_cpu))
+			break;
+		retries--;
+	}
+
+	if (!retries)
+		dev_warn(ctx->dev, "failed to set CPU boost affinity\n");
+}
+
 /* hooks for the wil6210 driver */
 static int ops_bus_request(void *handle, u32 kbps /* KBytes/Sec */)
 {
@@ -1085,6 +1173,35 @@ static int ops_bus_request(void *handle, u32 kbps /* KBytes/Sec */)
 			"Failed msm_bus voting. kbps=%d vote=%d, rc=%d\n",
 			kbps, vote, rc);
 
+	if (ctx->use_cpu_boost) {
+		bool was_boosted = ctx->is_cpu_boosted;
+		bool needs_boost = (kbps >= WIGIG_MIN_CPU_BOOST_KBPS);
+
+		if (was_boosted != needs_boost) {
+			if (needs_boost) {
+				rc = core_ctl_set_boost(true);
+				if (rc) {
+					dev_err(ctx->dev,
+						"Failed enable boost rc=%d\n",
+						rc);
+					goto out;
+				}
+				msm_11ad_set_boost_affinity(ctx);
+				dev_dbg(ctx->dev, "CPU boost enabled\n");
+			} else {
+				rc = core_ctl_set_boost(false);
+				if (rc)
+					dev_err(ctx->dev,
+						"Failed disable boost rc=%d\n",
+						rc);
+				irq_modify_status(ctx->pcidev->irq,
+						  IRQ_NO_BALANCING, 0);
+				dev_dbg(ctx->dev, "CPU boost disabled\n");
+			}
+			ctx->is_cpu_boosted = needs_boost;
+		}
+	}
+out:
 	return rc;
 }
 

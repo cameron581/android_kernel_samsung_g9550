@@ -138,12 +138,13 @@
 
 		qcom,memshare {
 			compatible = "qcom,memshare";
-			memory-region = <&modem_shared_mem>;
 			
 			qcom,client_4 {
 				compatible = "qcom,memshare-peripheral";
-				qcom,peripheral-size = <0>;
+				memory-region = <&modem_shared_mem>;
+				qcom,peripheral-size = <0x06000000>;
 				qcom,client-id = <3>;
+				qcom,allocate-boot-time;
 				label = "modem";
 			};
 		};
@@ -225,13 +226,13 @@
 
 			/* Frequency table */
 			/* for level	:	1_Head 2_Tail*/
-			input_booster,cpu_freqs = <1324800 480000>;
+			input_booster,cpu_freqs = <1958400 1324800>;
 			input_booster,hmp_boost = <2 2>;
 			input_booster,bimc_freqs = <0 0>;
 
 			/* Time table */
-			input_booster,head_times = <1000 0>;
-			input_booster,tail_times = <0 500>;
+			input_booster,head_times = <200 0>;
+			input_booster,tail_times = <0 800>;
 		};
 		booster_key@5 {
 			input_booster,label = "KEYBOARD";
@@ -296,6 +297,38 @@
 			/* Time table */
 			input_booster,head_times = <200 0>;
 			input_booster,tail_times = <0 300>;
+		}; // Input Booster -
+		booster_key@9 {
+			input_booster,label = "PEN";
+			input_booster,type = <8>;	/* BOOSTER_DEVICE_MOUSE */
+
+			input_booster,levels = <1 2>;
+
+			/* Frequency table */
+			/* for level	:	1_Head 2_Tail*/
+			input_booster,cpu_freqs = <1574400 979200>;
+			input_booster,hmp_boost = <2 2>;
+			input_booster,bimc_freqs = <0 0>;
+
+			/* Time table */
+			input_booster,head_times = <200 0>;
+			input_booster,tail_times = <0 600>;
+		}; // Input Booster -
+		booster_key@10 {
+			input_booster,label = "KEY_TWO";
+			input_booster,type = <9>;	/* BOOSTER_DEVICE_KEY */
+
+			input_booster,levels = <1>;
+
+			/* Frequency table */
+			/* for level	:	1_Head */
+			input_booster,cpu_freqs = <1574400>;
+			input_booster,hmp_boost = <2>;
+			input_booster,bimc_freqs = <0>;
+
+			/* Time table */
+			input_booster,head_times = <700>;
+			input_booster,tail_times = <700>;
 		}; // Input Booster -
 		/* If you need to add new key type, add it this position */
 	};
@@ -424,10 +457,10 @@
 };
 
 &pcie0 {
+	/delete-property/ qcom,ep-latency;
 	qcom,phy-sequence-override = <0x010 0x00 0x00 // SSC enable(0x01), disable(0x00)
-				0x8a4 0x4d 0x00>; // PCIE_N_LP_WAKEUP_DLY_TIME_AUXCLK
-	qcom,perst-delay-us-min = <17000>;
-	qcom,perst-delay-us-max = <17005>;
+				0x500 0x10 0x00	// QSERDES_RX_SIGDET_ENABLES
+				0x9d8 0xaa 0x00>; // PCIE_USB3_PCS_RX_SIGDET_LVL
 };
 
 &pil_modem {

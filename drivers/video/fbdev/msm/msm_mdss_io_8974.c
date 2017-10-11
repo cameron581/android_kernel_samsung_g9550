@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,6 +16,8 @@
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/clk/msm-clk.h>
+#include <linux/iopoll.h>
+#include <linux/kthread.h>
 
 #include "mdss_dsi.h"
 #include "mdss_dp.h"
@@ -425,6 +427,20 @@ static void mdss_dsi_ctrl_phy_reset(struct mdss_dsi_ctrl_pdata *ctrl)
 	MIPI_OUTP(ctrl->ctrl_base + 0x12c, 0x0000);
 	udelay(100);
 	wmb();	/* maek sure reset cleared */
+}
+
+int mdss_dsi_phy_pll_reset_status(struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	int rc;
+	u32 val;
+	u32 const sleep_us = 10, timeout_us = 100;
+
+	pr_debug("%s: polling for RESETSM_READY_STATUS.CORE_READY\n",
+		__func__);
+	rc = readl_poll_timeout(ctrl->phy_io.base + 0x4cc, val,
+		(val & 0x1), sleep_us, timeout_us);
+
+	return rc;
 }
 
 static void mdss_dsi_phy_sw_reset_sub(struct mdss_dsi_ctrl_pdata *ctrl)
@@ -931,8 +947,11 @@ static void mdss_dsi_8996_phy_power_off(
 {
 	int ln;
 	void __iomem *base;
+	u32 data;
 
-	MIPI_OUTP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0, 0x7f);
+	/* Turn off PLL power */
+	data = MIPI_INP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0);
+	MIPI_OUTP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0, data & ~BIT(7));
 
 	/* 4 lanes + clk lane configuration */
 	for (ln = 0; ln < 5; ln++) {
@@ -988,6 +1007,7 @@ static void mdss_dsi_8996_phy_power_on(
 	void __iomem *base;
 	struct mdss_dsi_phy_ctrl *pd;
 	char *ip;
+	u32 data;
 
 	pd = &(((ctrl->panel_data).panel_info.mipi).dsi_phy_db);
 
@@ -1007,6 +1027,10 @@ static void mdss_dsi_8996_phy_power_on(
 	}
 
 	mdss_dsi_8996_phy_regulator_enable(ctrl);
+
+	/* Turn on PLL power */
+	data = MIPI_INP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0);
+	MIPI_OUTP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0, data | BIT(7));
 }
 
 static void mdss_dsi_phy_power_on(
@@ -1110,6 +1134,7 @@ static void mdss_dsi_8996_phy_config(struct mdss_dsi_ctrl_pdata *ctrl)
 			mdss_dsi_8996_pll_source_standalone(ctrl);
 	}
 
+	MIPI_OUTP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0, 0x7f);
 	wmb(); /* make sure registers committed */
 }
 
@@ -1943,6 +1968,20 @@ error:
 }
 
 /**
+ * mdss_dsi_phy_idle_pc_exit() - Called after exit Idle PC
+ * @ctrl: pointer to DSI controller structure
+ *
+ * Perform any programming needed after Idle PC exit.
+ */
+static int mdss_dsi_phy_idle_pc_exit(struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	if (ctrl->shared_data->phy_rev == DSI_PHY_REV_30)
+		mdss_dsi_phy_v3_idle_pc_exit(ctrl);
+
+	return 0;
+}
+
+/**
  * mdss_dsi_clamp_ctrl_default() - Program DSI clamps
  * @ctrl: pointer to DSI controller structure
  * @enable: true to enable clamps, false to disable clamps
@@ -2372,9 +2411,16 @@ int mdss_dsi_post_clkoff_cb(void *priv,
 		pdata = &ctrl->panel_data;
 
 		for (i = DSI_MAX_PM - 1; i >= DSI_CORE_PM; i--) {
-			if ((ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE) &&
-				(i != DSI_CORE_PM))
-				continue;
+			/**
+			 * If DSI_CTRL is active, proceed to turn off
+			 * supplies which support turning off in low power
+			 * state
+			 */
+			if (ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE)
+				if (!sdata->power_data[i].vreg_config
+						->lp_disable_allowed)
+					continue;
+
 			rc = msm_dss_enable_vreg(
 				sdata->power_data[i].vreg_config,
 				sdata->power_data[i].num_vreg, 0);
@@ -2384,6 +2430,12 @@ int mdss_dsi_post_clkoff_cb(void *priv,
 					__mdss_dsi_pm_name(i));
 				rc = 0;
 			} else {
+				pr_debug("%s: disabled vreg for %s panel_state %d\n",
+					__func__,
+					__mdss_dsi_pm_name(i),
+					pdata->panel_info.panel_power_state);
+				sdata->power_data[i].vreg_config->disabled =
+					true;
 				ctrl->core_power = false;
 			}
 		}
@@ -2423,7 +2475,7 @@ int mdss_dsi_pre_clkon_cb(void *priv,
 		for (i = DSI_CORE_PM; i < DSI_MAX_PM; i++) {
 			if ((ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE) &&
 				(!pdata->panel_info.cont_splash_enabled) &&
-				(i != DSI_CORE_PM))
+				(!sdata->power_data[i].vreg_config->disabled))
 				continue;
 			rc = msm_dss_enable_vreg(
 				sdata->power_data[i].vreg_config,
@@ -2433,11 +2485,20 @@ int mdss_dsi_pre_clkon_cb(void *priv,
 					__func__,
 					__mdss_dsi_pm_name(i));
 			} else {
+				pr_debug("%s: enabled vregs for %s\n",
+					__func__,
+					__mdss_dsi_pm_name(i));
+				sdata->power_data[i].vreg_config->disabled =
+					false;
 				ctrl->core_power = true;
 			}
-
 		}
 	}
+
+	if ((clk_type & MDSS_DSI_LINK_CLK) &&
+		(new_state == MDSS_DSI_CLK_ON) &&
+		!ctrl->panel_data.panel_info.cont_splash_enabled)
+		mdss_dsi_phy_idle_pc_exit(ctrl);
 
 	return rc;
 }

@@ -77,6 +77,7 @@ u32 sde_apply_comp_ratio_factor(u32 quota,
 
 #define RES_1080p		(1088*1920)
 #define RES_UHD		(3840*2160)
+#define RES_WQXGA		(2560*1600)
 #define XIN_HALT_TIMEOUT_US	0x4000
 
 static int sde_mdp_wait_for_xin_halt(u32 xin_id)
@@ -175,15 +176,32 @@ u32 sde_mdp_get_ot_limit(u32 width, u32 height, u32 pixfmt, u32 fps, u32 is_rd)
 	SDEROT_DBG("w:%d h:%d fps:%d pixfmt:%8.8x yuv:%d res:%d rd:%d\n",
 		width, height, fps, pixfmt, is_yuv, res, is_rd);
 
-	if (!is_yuv)
-		goto exit;
+	switch (mdata->mdss_version) {
+	case MDSS_MDP_HW_REV_320:
+	case MDSS_MDP_HW_REV_330:
+		if ((res <= RES_1080p) && (fps <= 30) && is_yuv)
+			ot_lim = 2;
+		else if ((res <= RES_1080p) && (fps <= 60) && is_yuv)
+			ot_lim = 4;
+		else if ((res <= RES_UHD) && (fps <= 30) && is_yuv)
+			ot_lim = 8;
+		else if ((res <= RES_WQXGA) && (fps <= 60) && is_yuv)
+			ot_lim = 4;
+		else if ((res <= RES_WQXGA) && (fps <= 60))
+			ot_lim = 16;
+		break;
+	default:
+		if (is_yuv) {
+			if ((res <= RES_1080p) && (fps <= 30))
+				ot_lim = 2;
+			else if ((res <= RES_1080p) && (fps <= 60))
+				ot_lim = 4;
+			else if ((res <= RES_UHD) && (fps <= 30))
+				ot_lim = 8;
+		}
+		break;
+	}
 
-	if ((res <= RES_1080p) && (fps <= 30))
-		ot_lim = 2;
-	else if ((res <= RES_1080p) && (fps <= 60))
-		ot_lim = 4;
-	else if ((res <= RES_UHD) && (fps <= 30))
-		ot_lim = 8;
 
 exit:
 	SDEROT_DBG("ot_lim=%d\n", ot_lim);
@@ -420,6 +438,40 @@ static void sde_mdp_parse_vbif_qos(struct platform_device *pdev,
 	}
 }
 
+static int sde_mdp_parse_vbif_xin_id(struct platform_device *pdev,
+		struct sde_rot_data_type *mdata)
+{
+	int rc = 0;
+	bool default_xin_id = false;
+
+	mdata->nxid = sde_mdp_parse_dt_prop_len(pdev,
+			"qcom,mdss-rot-xin-id");
+	if (!mdata->nxid) {
+		mdata->nxid = 2;
+		default_xin_id = true;
+	}
+	mdata->vbif_xin_id = kzalloc(sizeof(u32) *
+			mdata->nxid, GFP_KERNEL);
+	if (!mdata->vbif_xin_id) {
+		SDEROT_ERR("xin alloc failure\n");
+		return -ENOMEM;
+	}
+	if (default_xin_id) {
+		mdata->vbif_xin_id[XIN_SSPP] = XIN_SSPP;
+		mdata->vbif_xin_id[XIN_WRITEBACK] = XIN_WRITEBACK;
+	} else {
+		rc = sde_mdp_parse_dt_handler(pdev,
+			"qcom,mdss-rot-xin-id", mdata->vbif_xin_id,
+				mdata->nxid);
+		if (rc) {
+			SDEROT_ERR("vbif xin id setting not found\n");
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
 static int sde_mdp_parse_dt_misc(struct platform_device *pdev,
 		struct sde_rot_data_type *mdata)
 {
@@ -445,6 +497,11 @@ static int sde_mdp_parse_dt_misc(struct platform_device *pdev,
 			"Could not read optional property: highest bank bit\n");
 
 	sde_mdp_parse_vbif_qos(pdev, mdata);
+	rc = sde_mdp_parse_vbif_xin_id(pdev, mdata);
+	if (rc) {
+		SDEROT_DBG("vbif xin id dt parse failure\n");
+		return rc;
+	}
 
 	mdata->mdp_base = mdata->sde_io.base + SDE_MDP_OFFSET;
 

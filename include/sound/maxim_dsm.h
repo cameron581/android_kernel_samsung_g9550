@@ -32,6 +32,7 @@
 #define FLAG_WRITE_ONOFF_ONLY				0xcdababef
 #define FLAG_WRITE_RDC_CAL_ONLY				0xca00ca00
 #define FLAG_WRITE_FEATURE_ONLY				0xfea0fea0
+#define PARAM_WRITE_V_VALIDATION				0xFEB0FEB0
 
 #define RESERVED_ADDR_COUNT		0xFF
 #define START_ADDR_FOR_LSI		0x2A004C
@@ -61,6 +62,7 @@
 #define DSM_API_SETGET_WRITE_FLAG 				63
 #define DSM_API_SETGET_ENABLE_SMART_PT			104
 #define DSM_API_SETGET_POWER_MEASUREMENT 		136
+#define DSM_API_GET_V_VALIDATION                145
 
 enum maxdsm_version {
 	VERSION_3_0 = 30,
@@ -238,6 +240,8 @@ enum maxdsm_4_0_params {
 	PARAM_Q_NOTCH_SZ,
 	PARAM_POWER_MEASUREMENT,
 	PARAM_POWER_MEASUREMENT_SZ,
+	PARAM_V_VALIDATION,
+	PARAM_V_VALIDATION_SZ,
 	PARAM_DSM_4_0_MAX,
 };
 
@@ -471,6 +475,16 @@ struct maxim_dsm {
 #define USE_DSM_UPDATE_CAL
 #define USE_DSM_LOG
 #define USE_DSM_DEBUG
+
+#ifdef USE_DSM_LOG
+enum {
+	SPK_EXCURSION_MAX,
+	SPK_TEMP_MAX,
+	SPK_EXCURSION_OVERCNT,
+	SPK_TEMP_OVERCNT,
+};
+#endif
+
 #endif /* CONFIG_SND_SOC_MAXIM_DSM */
 
 int maxdsm_init(void);
@@ -479,7 +493,7 @@ void maxdsm_deinit(void);
 uint32_t maxdsm_get_platform_type(void);
 uint32_t maxdsm_get_version(void);
 uint32_t maxdsm_is_stereo(void);
-int maxdsm_set_feature_en(int on);
+int maxdsm_set_feature_en(int on, uint32_t wflag);
 int maxdsm_set_rdc_temp(int rdc, int temp);
 int maxdsm_set_dsm_onoff_status(int on);
 uint32_t maxdsm_get_dcresistance(void);
@@ -500,6 +514,8 @@ void maxdsm_set_spk_state(int state);
 int maxdsm_set_pilot_signal_state(int on);
 uint32_t maxdsm_get_power_measurement(void);
 void maxdsm_set_stereo_mode_configuration(unsigned int);
+int maxdsm_set_v_validation_mode(int on);
+uint32_t maxdsm_get_v_validation(void);
 
 #ifdef USE_DSM_LOG
 struct maxim_dsm_log_max_values {
@@ -526,6 +542,7 @@ void maxdsm_log_update(const void *byte_log_array,
 		const void *int_log_max_array);
 ssize_t maxdsm_log_prepare(char *buf);
 void maxdsm_log_max_prepare(struct maxim_dsm_log_max_values *values);
+void maxdsm_log_max_refresh(int values);
 void maxdsm_cal_update(const void *byte_log_array,
 		const void *int_log_array,
 		const void *after_prob_byte_log_array,

@@ -116,11 +116,15 @@ obj-$(CONFIG_REGULATOR_CPR3_HMSS) += cpr3-hmss-regulator.o
 obj-$(CONFIG_REGULATOR_CPR3_MMSS) += cpr3-mmss-regulator.o
 obj-$(CONFIG_REGULATOR_CPR4_APSS) += cpr4-apss-regulator.o
 obj-$(CONFIG_REGULATOR_CPRH_KBSS) += cprh-kbss-regulator.o
+obj-$(CONFIG_REGULATOR_CPR4_MMSS_LDO) += cpr4-mmss-ldo-regulator.o
 obj-$(CONFIG_REGULATOR_QPNP_LABIBB) += qpnp-labibb-regulator.o
+obj-$(CONFIG_REGULATOR_QPNP_LCDB) += qpnp-lcdb-regulator.o
+obj-$(CONFIG_REGULATOR_QPNP_OLEDB) += qpnp-oledb-regulator.o
 obj-$(CONFIG_REGULATOR_STUB) += stub-regulator.o
 obj-$(CONFIG_REGULATOR_KRYO) += kryo-regulator.o
 obj-$(CONFIG_REGULATOR_CPR2_GFX) += cpr2-gfx-regulator.o
 obj-$(CONFIG_REGULATOR_S2MPB02) += s2mpb02-regulator.o
+obj-$(CONFIG_REGULATOR_S2MPB02_SUB) += s2mpb02-sub-regulator.o
 obj-$(CONFIG_REGULATOR_S2ABB01) += s2abb01-regulator.o
 
 ccflags-$(CONFIG_REGULATOR_DEBUG) += -DDEBUG

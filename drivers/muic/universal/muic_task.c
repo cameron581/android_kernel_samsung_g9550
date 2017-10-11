@@ -28,6 +28,7 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/host_notify.h>
+#include <linux/ccic/s2mm005.h>
 
 #if defined(CONFIG_MUIC_UNIVERSAL_SM5720)
 #include <linux/mfd/sm5720.h>
@@ -220,7 +221,19 @@ static int sm5720_muic_irq_handler(muic_data_t *pmuic, int irq)
 	
 	if(pdata->afc_limit_voltage) {
 		pr_err("%s: Ignore INTS, limit voltage \n", __func__);
-		return INT_REQ_DISCARD;
+
+		switch (local_irq) {
+			case SM5720_MUIC_IRQ_INT3_QC20_ACCEPTED:
+			case SM5720_MUIC_IRQ_INT3_AFC_ERROR:
+			case SM5720_MUIC_IRQ_INT3_AFC_STA_CHG:
+			case SM5720_MUIC_IRQ_INT3_MULTI_BYTE:
+			case SM5720_MUIC_IRQ_INT3_VBUS_UPDATE:
+			case SM5720_MUIC_IRQ_INT3_AFC_ACCEPTED:
+			case SM5720_MUIC_IRQ_INT3_AFC_TA_ATTACHED:
+				return INT_REQ_DISCARD;
+			default:
+				break;
+		}
 	}
 	else if(!pdata->afc_disable) {
 		if ( local_irq == SM5720_MUIC_IRQ_INT3_QC20_ACCEPTED ) {  /*QC20_ACCEPTED*/
@@ -256,14 +269,21 @@ static int sm5720_muic_irq_handler(muic_data_t *pmuic, int irq)
 			return INT_REQ_DISCARD;
 		}
 
-		if ( local_irq == SM5720_MUIC_IRQ_INT3_AFC_TA_ATTACHED ) {  /*AFC_TA_ATTACHED*/
+		if ((local_irq == SM5720_MUIC_IRQ_INT3_AFC_TA_ATTACHED)) {  /*AFC_TA_ATTACHED*/
 #if !defined(CONFIG_SEC_FACTORY)
 			/* To prevent damage by RP0 Cable, AFC should be progress after ccic_attach */
-			if (pmuic->is_ccic_attach)
-				afcops->afc_ta_attach(pmuic->regmapdesc);
-			else {
+			if (pmuic->is_ccic_attach) {
+				if (pmuic->ccic_rp == Rp_56K)
+					afcops->afc_ta_attach(pmuic->regmapdesc);
+				else {
+					pmuic->retry_afc = true;
+					pr_info("%s: Rp isn't 56K, but is (%d)K\n", __func__, pmuic->ccic_rp);
+					pmuic->attached_dev = ATTACHED_DEV_AFC_CHARGER_5V_MUIC;
+					muic_notifier_attach_attached_dev(pmuic->attached_dev);
+				}
+			} else {
 				pmuic->retry_afc = true;
-				pr_info("%s: Need AFC restart for late ccic_attach\n", __func__);
+				pr_info("%s: Need to restart AFC for late ccic_attach\n", __func__);
 			}
 #else
 			afcops->afc_ta_attach(pmuic->regmapdesc);
@@ -272,7 +292,7 @@ static int sm5720_muic_irq_handler(muic_data_t *pmuic, int irq)
 		}
 	}
 	else
-		pr_err("%s: Ignore AFC_INTS, AFC is disabled \n", __func__);
+		pr_err("%s: Ignore AFC_INTS, AFC is disabled by setting\n", __func__);
 #endif
 
 	return INT_REQ_DONE;

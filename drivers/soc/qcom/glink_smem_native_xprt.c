@@ -51,7 +51,7 @@
 #define RPM_MAX_TOC_ENTRIES 20
 #define RPM_FIFO_ADDR_ALIGN_BYTES 3
 #define TRACER_PKT_FEATURE BIT(2)
-
+#define DEFERRED_CMDS_THRESHOLD 25
 /**
  * enum command_types - definition of the types of commands sent/received
  * @VERSION_CMD:		Version and feature set supported
@@ -181,6 +181,7 @@ struct mailbox_config_info {
  *				processing.
  * @deferred_cmds:		List of deferred commands that need to be
  *				processed in process context.
+ * @deferred_cmds_cnt:		Number of deferred commands in queue.
  * @num_pw_states:		Size of @ramp_time_us.
  * @ramp_time_us:		Array of ramp times in microseconds where array
  *				index position represents a power state.
@@ -218,6 +219,7 @@ struct edge_info {
 	bool in_ssr;
 	spinlock_t rx_lock;
 	struct list_head deferred_cmds;
+	uint32_t deferred_cmds_cnt;
 	uint32_t num_pw_states;
 	unsigned long *ramp_time_us;
 	struct mailbox_config_info *mailbox;
@@ -252,7 +254,7 @@ static DEFINE_MUTEX(probe_lock);
 static struct glink_core_version versions[] = {
 	{1, TRACER_PKT_FEATURE, negotiate_features_v1},
 };
-
+void *smem_mpss_ipc_log = NULL;
 /**
  * send_irq() - send an irq to a remote entity as an event signal
  * @einfo:	Which remote entity that should receive the irq.
@@ -461,6 +463,7 @@ static int fifo_read(struct edge_info *einfo, void *_data, int len)
 		if (read_index >= fifo_size)
 			read_index -= fifo_size;
 	}
+	trace_printk("%p, %x, %x\n", einfo, einfo->rx_ch_desc->read_index, read_index);
 	einfo->rx_ch_desc->read_index = read_index;
 
 	return orig_len - len;
@@ -796,6 +799,7 @@ static bool queue_cmd(struct edge_info *einfo, void *cmd, void *data)
 	d_cmd->param2 = _cmd->param2;
 	d_cmd->data = data;
 	list_add_tail(&d_cmd->list_node, &einfo->deferred_cmds);
+	einfo->deferred_cmds_cnt++;
 	queue_kthread_work(&einfo->kworker, &einfo->kwork);
 	return true;
 }
@@ -816,12 +820,46 @@ static bool get_rx_fifo(struct edge_info *einfo)
 							&einfo->rx_fifo_size,
 							einfo->remote_proc_id,
 							SMEM_ITEM_CACHED_FLAG);
-		if (!einfo->rx_fifo)
-			return false;
+		if (!einfo->rx_fifo){
+			einfo->rx_fifo = smem_get_entry( 
+			SMEM_GLINK_NATIVE_XPRT_FIFO_1, 
+			&einfo->rx_fifo_size, 
+			einfo->remote_proc_id, 
+			0); 
+			if (!einfo->rx_fifo) 
+				return false;
+		}
 	}
 
 	return true;
 }
+
+ /**
+ * tx_wakeup_worker() - worker function to wakeup tx blocked thread
+ * @work:	kwork associated with the edge to process commands on.
+ */
+static void tx_wakeup_worker(struct edge_info *einfo)
+{
+	bool trigger_wakeup = false;
+	unsigned long flags;
+
+	if (einfo->in_ssr)
+		return;
+	if (einfo->tx_resume_needed && fifo_write_avail(einfo)) {
+		einfo->tx_resume_needed = false;
+		einfo->xprt_if.glink_core_if_ptr->tx_resume(
+						&einfo->xprt_if);
+	}
+	spin_lock_irqsave(&einfo->write_lock, flags);
+	if (waitqueue_active(&einfo->tx_blocked_queue)) { /* tx waiting ?*/
+		einfo->tx_blocked_signal_sent = false;
+		trigger_wakeup = true;
+	}
+	spin_unlock_irqrestore(&einfo->write_lock, flags);
+	if (trigger_wakeup)
+		wake_up_all(&einfo->tx_blocked_queue);
+}
+
 
 /**
  * __rx_worker() - process received commands on a specific edge
@@ -846,7 +884,6 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 	int i;
 	bool granted;
 	unsigned long flags;
-	bool trigger_wakeup = false;
 	int rcu_id;
 	uint16_t rcid;
 	uint32_t name_len;
@@ -871,22 +908,10 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 		srcu_read_unlock(&einfo->use_ref, rcu_id);
 		return;
 	}
-	if (!atomic_ctx) {
-		if (einfo->tx_resume_needed && fifo_write_avail(einfo)) {
-			einfo->tx_resume_needed = false;
-			einfo->xprt_if.glink_core_if_ptr->tx_resume(
-							&einfo->xprt_if);
-		}
-		spin_lock_irqsave(&einfo->write_lock, flags);
-		if (waitqueue_active(&einfo->tx_blocked_queue)) {
-			einfo->tx_blocked_signal_sent = false;
-			trigger_wakeup = true;
-		}
-		spin_unlock_irqrestore(&einfo->write_lock, flags);
-		if (trigger_wakeup)
-			wake_up_all(&einfo->tx_blocked_queue);
-	}
 
+	if ((atomic_ctx) && ((einfo->tx_resume_needed) ||
+		(waitqueue_active(&einfo->tx_blocked_queue)))) /* tx waiting ?*/
+		tx_wakeup_worker(einfo);
 
 	/*
 	 * Access to the fifo needs to be synchronized, however only the calls
@@ -905,10 +930,15 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 		if (einfo->in_ssr)
 			break;
 
+		if (atomic_ctx && !einfo->intentless &&
+		    einfo->deferred_cmds_cnt >= DEFERRED_CMDS_THRESHOLD)
+			break;
+
 		if (!atomic_ctx && !list_empty(&einfo->deferred_cmds)) {
 			d_cmd = list_first_entry(&einfo->deferred_cmds,
 						struct deferred_cmd, list_node);
 			list_del(&d_cmd->list_node);
+			einfo->deferred_cmds_cnt--;
 			cmd.id = d_cmd->id;
 			cmd.param1 = d_cmd->param1;
 			cmd.param2 = d_cmd->param2;
@@ -952,6 +982,9 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 				name = cmd_data;
 			} else {
 				len = ALIGN(name_len, FIFO_ALIGNMENT);
+				if (len > einfo->rx_fifo_size) {
+					BUG();
+				}
 				name = kmalloc(len, GFP_ATOMIC);
 				if (!name) {
 					pr_err("No memory available to rx ch open cmd name.  Discarding cmd.\n");
@@ -1170,6 +1203,11 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 		default:
 			pr_err("Unrecognized command: %d\n", cmd.id);
 			break;
+		}
+		if (einfo == edge_infos[1]) {
+			if (smem_mpss_ipc_log)
+				ipc_log_string(smem_mpss_ipc_log, "%s: QMCK smem mpss last cmd %u, write/read after cmd : 0x%x/0x%x\n",
+					__func__, cmd.id, einfo->rx_ch_desc->write_index, einfo->rx_ch_desc->read_index);
 		}
 	}
 	spin_unlock_irqrestore(&einfo->rx_lock, flags);
@@ -2343,7 +2381,7 @@ static int glink_smem_native_probe(struct platform_device *pdev)
 	einfo->tx_fifo = smem_alloc(SMEM_GLINK_NATIVE_XPRT_FIFO_0,
 							einfo->tx_fifo_size,
 							einfo->remote_proc_id,
-							SMEM_ITEM_CACHED_FLAG);
+							0);
 	if (!einfo->tx_fifo) {
 		pr_err("%s: smem alloc of tx fifo failed\n", __func__);
 		rc = -ENOMEM;
@@ -3072,6 +3110,7 @@ static int __init glink_smem_native_xprt_init(void)
 		return rc;
 	}
 
+	smem_mpss_ipc_log = ipc_log_context_create (10, "glink_smem_mpss_native1", 0);
 	return 0;
 }
 arch_initcall(glink_smem_native_xprt_init);

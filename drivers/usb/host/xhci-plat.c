@@ -138,6 +138,8 @@ static int xhci_plat_probe(struct platform_device *pdev)
 	struct clk              *clk;
 	int			ret;
 	int			irq;
+	u32			temp, imod;
+	unsigned long		flags;
 
 	pr_info("%s\n", __func__);
 	if (usb_disabled())
@@ -230,6 +232,10 @@ static int xhci_plat_probe(struct platform_device *pdev)
 			(pdata && pdata->usb3_lpm_capable))
 		xhci->quirks |= XHCI_LPM_SUPPORT;
 
+#ifdef CONFIG_USB_HOST_L1_SUPPORT
+	xhci->quirks |= XHCI_LPM_L1_SUPPORT;
+#endif
+
 	if (HCC_MAX_PSA(xhci->hcc_params) >= 4)
 		xhci->shared_hcd->can_do_streams = 1;
 
@@ -256,6 +262,18 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		goto dealloc_usb2_hcd;
 
 	device_wakeup_enable(&xhci->shared_hcd->self.root_hub->dev);
+
+	/* override imod interval if specified */
+	if (pdata && pdata->imod_interval) {
+		imod = pdata->imod_interval & ER_IRQ_INTERVAL_MASK;
+		spin_lock_irqsave(&xhci->lock, flags);
+		temp = readl_relaxed(&xhci->ir_set->irq_control);
+		temp &= ~ER_IRQ_INTERVAL_MASK;
+		temp |= imod;
+		writel_relaxed(temp, &xhci->ir_set->irq_control);
+		spin_unlock_irqrestore(&xhci->lock, flags);
+		dev_dbg(&pdev->dev, "%s: imod set to %u\n", __func__, imod);
+	}
 
 	ret = device_create_file(&pdev->dev, &dev_attr_config_imod);
 	if (ret)
@@ -293,6 +311,18 @@ static int xhci_plat_remove(struct platform_device *dev)
 	struct usb_hcd	*hcd = platform_get_drvdata(dev);
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	struct clk *clk = xhci->clk;
+
+#if defined(CONFIG_USB_HOST_SAMSUNG_FEATURE)
+	/* In order to prevent kernel panic */
+	if(!pm_runtime_suspended(&xhci->shared_hcd->self.root_hub->dev)) {
+		pr_info("%s, shared_hcd pm_runtime_forbid\n", __func__);
+		pm_runtime_forbid(&xhci->shared_hcd->self.root_hub->dev);
+	}
+	if(!pm_runtime_suspended(&xhci->main_hcd->self.root_hub->dev)) {
+		pr_info("%s, main_hcd pm_runtime_forbid\n", __func__);
+		pm_runtime_forbid(&xhci->main_hcd->self.root_hub->dev);
+	}
+#endif
 
 	pm_runtime_disable(&dev->dev);
 

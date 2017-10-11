@@ -1637,6 +1637,7 @@ const struct inode_operations ecryptfs_dir_iops = {
 	.rename = ecryptfs_rename,
 	.permission = ecryptfs_permission,
 	.setattr = ecryptfs_setattr,
+	.getattr = ecryptfs_getattr,
 	.setxattr = ecryptfs_setxattr,
 	.getxattr = ecryptfs_getxattr,
 	.listxattr = ecryptfs_listxattr,

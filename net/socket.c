@@ -550,6 +550,9 @@ static struct socket *sock_alloc(void)
 {
 	struct inode *inode;
 	struct socket *sock;
+    /* START_OF_KNOX_VPN */
+    struct timespec open_timespec;
+    /* END_OF_KNOX_VPN */
 
 	inode = new_inode_pseudo(sock_mnt->mnt_sb);
 	if (!inode)
@@ -561,6 +564,8 @@ static struct socket *sock_alloc(void)
     if(sock) {
         sock->knox_sent = 0;
         sock->knox_recv = 0;
+        open_timespec = current_kernel_time();
+        sock->open_time = open_timespec.tv_sec;
     }
     /* END_OF_KNOX_VPN */
 
@@ -606,6 +611,7 @@ void sock_release(struct socket *sock)
 	/* START_OF_KNOX_VPN */
     sock->knox_sent = 0;
     sock->knox_recv = 0;
+    sock->open_time = 0;
     /* END_OF_KNOX_VPN */
 
 	sock->file = NULL;

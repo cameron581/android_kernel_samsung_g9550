@@ -35,7 +35,7 @@
 /*#define SECDP_PHY_AUTO_TEST*/			/* for PHY AUTOMATION TEST */
 #define SECDP_LIMIT_REAUTH				/* limit max HDCP reauth */
 #define SECDP_MAX_REAUTH_COUNT	100
-#define SECDP_BLOCK_DFP_VGA				/* block VGA dongle support */
+/*#define SECDP_BLOCK_DFP_VGA*/			/* block VGA dongle support */
 #define SECDP_AUX_RETRY					/* aux retry */
 
 #define DPCD_BRANCH_HW_REVISION    0x509
@@ -49,6 +49,8 @@
 #define AUX_CMD_FIFO_LEN	144
 #define AUX_CMD_MAX		16
 #define AUX_CMD_I2C_MAX		128
+
+#define AUX_CFG_LEN	10
 
 #define EDP_PORT_MAX		1
 #define EDP_SINK_CAP_LEN	16
@@ -200,6 +202,7 @@ struct dp_alt_mode {
 #define DPCD_MAX_DOWNSPREAD_0_5	BIT(2)
 #define DPCD_NO_AUX_HANDSHAKE	BIT(3)
 #define DPCD_PORT_0_EDID_PRESENTED	BIT(4)
+#define DPCD_PORT_1_EDID_PRESENTED	BIT(5)
 
 /* event */
 #define EV_EDP_AUX_SETUP		BIT(0)
@@ -245,14 +248,38 @@ struct dp_alt_mode {
 #define DP_LINK_RATE_MULTIPLIER	27000000
 #define DP_KHZ_TO_HZ            1000
 #define DP_MAX_PIXEL_CLK_KHZ	675000
+
+enum downstream_port_type {
+	DSP_TYPE_DP = 0x00,
+	DSP_TYPE_VGA,
+	DSP_TYPE_DVI_HDMI_DPPP,
+	DSP_TYPE_OTHER,
+};
+
+static inline char *mdss_dp_dsp_type_to_string(u32 dsp_type)
+{
+	switch (dsp_type) {
+	case DSP_TYPE_DP:
+		return DP_ENUM_STR(DSP_TYPE_DP);
+	case DSP_TYPE_VGA:
+		return DP_ENUM_STR(DSP_TYPE_VGA);
+	case DSP_TYPE_DVI_HDMI_DPPP:
+		return DP_ENUM_STR(DSP_TYPE_DVI_HDMI_DPPP);
+	case DSP_TYPE_OTHER:
+		return DP_ENUM_STR(DSP_TYPE_OTHER);
+	default:
+		return "unknown";
+	}
+}
+
 struct downstream_port_config {
 	/* Byte 02205h */
-	bool dfp_present;
-	u32 dfp_type;
+	bool dsp_present;
+	enum downstream_port_type dsp_type;
 	bool format_conversion;
 	bool detailed_cap_info_available;
 	/* Byte 02207h */
-	u32 dfp_count;
+	u32 dsp_count;
 	bool msa_timing_par_ignored;
 	bool oui_support;
 };
@@ -267,6 +294,8 @@ struct secdp_phy_param_st {
 };
 #endif
 
+#define DP_MAX_DS_PORT_COUNT 2
+
 struct dpcd_cap {
 	char major;
 	char minor;
@@ -277,6 +306,7 @@ struct dpcd_cap {
 	char enhanced_frame;
 	u32 max_link_rate;  /* 162, 270 and 540 Mb, divided by 10 */
 	u32 flags;
+	u32 rx_port_buf_size[DP_MAX_DS_PORT_COUNT];
 	u32 rx_port0_buf_size;
 	u32 training_read_interval;/* us */
 	struct downstream_port_config downstream_port;
@@ -372,6 +402,10 @@ struct edp_edid {
 	char hsync_pol;		/* 0 = negative, 1 = positive */
 	char ext_block_cnt;
 	struct display_timing_desc timing[4];
+
+#ifdef CONFIG_SEC_DISPLAYPORT
+	u32 id_serial_number;
+#endif
 };
 
 struct dp_statistic {
@@ -499,7 +533,6 @@ struct mdss_dp_drv_pdata {
 	bool core_clks_on;
 	bool link_clks_on;
 	bool power_on;
-	bool sink_info_read;
 	bool hpd;
 	bool psm_enabled;
 	bool audio_test_req;
@@ -512,6 +545,7 @@ struct mdss_dp_drv_pdata {
 	struct dss_io_data dp_cc_io;
 	struct dss_io_data qfprom_io;
 	struct dss_io_data hdcp_io;
+	u32 phy_reg_offset;
 	int base_size;
 	unsigned char *mmss_cc_base;
 	bool override_config;
@@ -537,6 +571,10 @@ struct mdss_dp_drv_pdata {
 	u32 edid_buf_size;
 	struct edp_edid edid;
 	struct dpcd_cap dpcd;
+
+	/* DP Pixel clock RCG and PLL parent */
+	struct clk *pixel_clk_rcg;
+	struct clk *pixel_parent;
 
 	/* regulators */
 	struct dss_module_power power_data[DP_MAX_PM];
@@ -602,6 +640,10 @@ struct mdss_dp_drv_pdata {
 	struct mdss_dp_event_data dp_event;
 	struct task_struct *ev_thread;
 
+	/* dt settings */
+	char l_map[4];
+	u32 aux_cfg[AUX_CFG_LEN];
+
 	struct workqueue_struct *workq;
 	struct delayed_work hdcp_cb_work;
 #ifdef CONFIG_SEC_DISPLAYPORT
@@ -620,8 +662,24 @@ struct mdss_dp_drv_pdata {
 
 	struct dpcd_test_request test_data;
 	struct dpcd_sink_count sink_count;
+	struct dpcd_sink_count prev_sink_count;
 
 	struct list_head attention_head;
+};
+
+enum dp_phy_lane_num {
+	DP_PHY_LN0 = 0,
+	DP_PHY_LN1 = 1,
+	DP_PHY_LN2 = 2,
+	DP_PHY_LN3 = 3,
+	DP_MAX_PHY_LN = 4,
+};
+
+enum dp_mainlink_lane_num {
+	DP_ML0 = 0,
+	DP_ML1 = 1,
+	DP_ML2 = 2,
+	DP_ML3 = 3,
 };
 
 enum dp_lane_count {
@@ -709,29 +767,6 @@ static inline char *mdss_dp_get_phy_test_pattern(u32 phy_test_pattern_sel)
 }
 
 #ifdef CONFIG_SEC_DISPLAYPORT
-enum dp_dfp_type {
-	DFP_TYPE_DP     = 0,
-	DFP_TYPE_VGA    = 1,
-	DFP_TYPE_HDMI   = 2,		/* DVI, HDMI, DP++ */
-	DFP_TYPE_OTHERS = 3,
-};
-
-static inline char *secdp_get_dfp_type_name(u32 type)
-{
-	switch (type) {
-	case DFP_TYPE_DP:
-		return DP_ENUM_STR(DFP_TYPE_DP);
-	case DFP_TYPE_VGA:
-		return DP_ENUM_STR(DFP_TYPE_VGA);
-	case DFP_TYPE_HDMI:
-		return DP_ENUM_STR(DFP_TYPE_HDMI);
-	case DFP_TYPE_OTHERS:
-		return DP_ENUM_STR(DFP_TYPE_OTHERS);
-	default:
-		return "unknown";
-	}
-}
-
 #define SAMSUNG_VENDOR_ID		0x04E8
 #define DEXDOCK_PRODUCT_ID		0xA020
 #endif
@@ -1106,6 +1141,12 @@ static inline void mdss_dp_reset_frame_crc_data(struct mdss_dp_crc_data *crc)
 	crc->g_y = 0;
 	crc->b_cb = 0;
 	crc->en = false;
+}
+
+static inline bool mdss_dp_is_dsp_type_vga(struct mdss_dp_drv_pdata *dp)
+{
+	return (dp->dpcd.downstream_port.dsp_present &&
+		(dp->dpcd.downstream_port.dsp_type == DSP_TYPE_VGA));
 }
 
 void mdss_dp_phy_initialize(struct mdss_dp_drv_pdata *dp);

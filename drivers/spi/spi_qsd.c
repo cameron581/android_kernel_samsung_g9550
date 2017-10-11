@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -177,6 +177,112 @@ static inline void msm_spi_free_gpios(struct msm_spi *dd)
 			__func__, SPI_PINCTRL_STATE_SLEEP);
 	}
 }
+
+#ifndef CONFIG_ESE_SECURE
+int ese_spi_request_gpios(struct spi_device *spidev)
+{
+	int i = 0;
+	int result = 0;
+	struct msm_spi *dd;
+
+	if (!spidev) {
+		pr_err("%s: spidev pointer is NULL\n", __func__);
+		return -EFAULT;
+	}
+
+	dd = spi_master_get_devdata(spidev->master);
+	if (!dd) {
+		pr_err("%s: spi master pointer is NULL\n", __func__);
+		return -EFAULT;
+	}
+
+	if (!dd->pdata->use_pinctrl) {
+		for (i = 0; i < ARRAY_SIZE(spi_rsrcs); ++i) {
+			if (dd->spi_gpios[i] >= 0) {
+				result = gpio_request(dd->spi_gpios[i],
+						spi_rsrcs[i]);
+				if (result) {
+					dev_err(dd->dev,
+					"%s: gpio_request for pin %d "
+					"failed with error %d\n"
+					, __func__, dd->spi_gpios[i], result);
+					goto error;
+				}
+			}
+		}
+	} else {
+		result = pinctrl_select_state(dd->pinctrl, dd->pins_active);
+		if (result) {
+			dev_err(dd->dev, "%s: Can not set %s pins\n",
+			__func__, SPI_PINCTRL_STATE_DEFAULT);
+			goto error;
+		}
+	}
+	pr_info("%s sucess\n", __func__);
+	return 0;
+error:
+	pr_err("%s error\n", __func__);
+	if (!dd->pdata->use_pinctrl) {
+		for (; --i >= 0;) {
+			if (dd->spi_gpios[i] >= 0)
+				gpio_free(dd->spi_gpios[i]);
+		}
+	}
+	return result;
+}
+EXPORT_SYMBOL_GPL(ese_spi_request_gpios);
+
+int ese_spi_free_gpios(struct spi_device *spidev)
+{
+	int i = 0;
+	int result = 0;
+	struct msm_spi *dd;
+
+	if (!spidev) {
+		pr_err("%s: spidev pointer is NULL\n", __func__);
+		return -EFAULT;
+	}
+
+	dd = spi_master_get_devdata(spidev->master);
+	if (!dd) {
+		pr_err("%s: spi master pointer is NULL\n", __func__);
+		return -EFAULT;
+	}
+
+	if (!dd->pdata->use_pinctrl) {
+		for (i = 0; i < ARRAY_SIZE(spi_rsrcs); ++i) {
+			if (dd->spi_gpios[i] >= 0)
+				gpio_free(dd->spi_gpios[i]);
+			}
+
+		for (i = 0; i < ARRAY_SIZE(spi_cs_rsrcs); ++i) {
+			if (dd->cs_gpios[i].valid) {
+				gpio_free(dd->cs_gpios[i].gpio_num);
+				dd->cs_gpios[i].valid = 0;
+			}
+		}
+	} else {
+		result = pinctrl_select_state(dd->pinctrl, dd->pins_sleep);
+		if (result) {
+			dev_err(dd->dev, "%s: Can not set %s pins\n",
+			__func__, SPI_PINCTRL_STATE_SLEEP);
+			goto error;
+		}
+	}
+	pr_info("%s sucess\n", __func__);
+	return 0;
+error:
+	pr_err("%s error\n", __func__);
+	if (!dd->pdata->use_pinctrl) {
+		for (; --i >= 0;) {
+			if (dd->spi_gpios[i] >= 0)
+				gpio_free(dd->spi_gpios[i]);
+		}
+	}
+	return result;
+}
+EXPORT_SYMBOL_GPL(ese_spi_free_gpios);
+#endif
 
 static inline int msm_spi_request_cs_gpio(struct msm_spi *dd)
 {
@@ -1442,12 +1548,6 @@ static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 	u32 spi_ioc_orig;
 	int rc;
 
-	if (dd->suspended || !msm_spi_is_valid_state(dd)) {
-		dev_err(dd->dev, "%s: SPI operational state not valid %d\n",
-			__func__, dd->suspended);
-		return;
-	}
-
 	rc = pm_runtime_get_sync(dd->dev);
 	if (rc < 0) {
 		dev_err(dd->dev, "Failure during runtime get");
@@ -1460,7 +1560,8 @@ static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 			return;
 	}
 
-	msm_spi_clk_path_vote(dd, spi->max_speed_hz);
+// Remove duplicated function to vote spi clk. QC shall mainline it.
+//	msm_spi_clk_path_vote(dd, spi->max_speed_hz);
 
 	if (!(spi->mode & SPI_CS_HIGH))
 		set_flag = !set_flag;
@@ -1795,15 +1896,15 @@ err_setup_exit:
 
 static int debugfs_iomem_x32_set(void *data, u64 val)
 {
-	struct msm_spi_regs *debugfs_spi_regs = (struct msm_spi_regs *)data;
-	struct msm_spi *dd = debugfs_spi_regs->dd;
+	struct msm_spi_debugfs_data *reg = (struct msm_spi_debugfs_data *)data;
+	struct msm_spi *dd = reg->dd;
 	int ret;
 
 	ret = pm_runtime_get_sync(dd->dev);
 	if (ret < 0)
 		return ret;
 
-	writel_relaxed(val, (dd->base + debugfs_spi_regs->offset));
+	writel_relaxed(val, (dd->base + reg->offset));
 	/* Ensure the previous write completed. */
 	mb();
 
@@ -1814,14 +1915,14 @@ static int debugfs_iomem_x32_set(void *data, u64 val)
 
 static int debugfs_iomem_x32_get(void *data, u64 *val)
 {
-	struct msm_spi_regs *debugfs_spi_regs = (struct msm_spi_regs *)data;
-	struct msm_spi *dd = debugfs_spi_regs->dd;
+	struct msm_spi_debugfs_data *reg = (struct msm_spi_debugfs_data *)data;
+	struct msm_spi *dd = reg->dd;
 	int ret;
 
 	ret = pm_runtime_get_sync(dd->dev);
 	if (ret < 0)
 		return ret;
-	*val = readl_relaxed(dd->base + debugfs_spi_regs->offset);
+	*val = readl_relaxed(dd->base + reg->offset);
 	/* Ensure the previous read completed. */
 	mb();
 
@@ -1835,18 +1936,21 @@ DEFINE_SIMPLE_ATTRIBUTE(fops_iomem_x32, debugfs_iomem_x32_get,
 
 static void spi_debugfs_init(struct msm_spi *dd)
 {
-	dd->dent_spi = debugfs_create_dir(dev_name(dd->dev), NULL);
+	char dir_name[20];
+
+	scnprintf(dir_name, sizeof(dir_name), "%s_dbg", dev_name(dd->dev));
+	dd->dent_spi = debugfs_create_dir(dir_name, NULL);
 	if (dd->dent_spi) {
 		int i;
 
 		for (i = 0; i < ARRAY_SIZE(debugfs_spi_regs); i++) {
-			debugfs_spi_regs[i].dd = dd;
+			dd->reg_data[i].offset = debugfs_spi_regs[i].offset;
+			dd->reg_data[i].dd = dd;
 			dd->debugfs_spi_regs[i] =
 			   debugfs_create_file(
 			       debugfs_spi_regs[i].name,
 			       debugfs_spi_regs[i].mode,
-			       dd->dent_spi,
-			       debugfs_spi_regs+i,
+			       dd->dent_spi, &dd->reg_data[i],
 			       &fops_iomem_x32);
 		}
 	}
@@ -2691,12 +2795,7 @@ static int msm_spi_probe(struct platform_device *pdev)
 		dd->use_dma = 1;
 	}
 
-#if defined(CONFIG_ARM64) || defined(CONFIG_LPAE)
-	dma_set_mask(&pdev->dev, DMA_BIT_MASK(36));
-#else
-	dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
-#endif
-
+	spi_dma_mask(&pdev->dev);
 skip_dma_resources:
 
 	spin_lock_init(&dd->queue_lock);

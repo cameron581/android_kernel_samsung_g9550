@@ -56,7 +56,11 @@
 static struct switch_dev switch_dock = {
 	.name = "dock",
 };
-
+#if defined(CONFIG_SEC_FACTORY)
+struct switch_dev switch_attached_muic_cable = {
+	.name = "attached_muic_cable",	/* sys/class/switch/attached_muic_cable/state */
+};
+#endif
 struct switch_dev switch_uart3 = {
 	.name = "uart3",	/* sys/class/switch/uart3/state */
 };
@@ -90,6 +94,16 @@ void muic_send_dock_intent(int type)
 	switch_set_state(&switch_dock, type);
 #endif
 }
+
+#if defined(CONFIG_SEC_FACTORY)
+void muic_send_attached_muic_cable_intent(int type)
+{
+	pr_info("%s: MUIC attached_muic_cable type(%d)\n", __func__, type);
+#ifdef CONFIG_SWITCH
+	switch_set_state(&switch_attached_muic_cable, type);
+#endif
+}
+#endif
 
 #if defined(CONFIG_MUIC_SUPPORT_EARJACK)
 static int muic_earjack_intent(int state)
@@ -299,7 +313,14 @@ static void muic_init_switch_dev_cb(void)
 				__func__, ret);
 		return;
 	}
-	
+#if defined(CONFIG_SEC_FACTORY)
+	ret = switch_dev_register(&switch_attached_muic_cable);
+	if (ret < 0) {
+		pr_err("%s: Failed to register attached_muic_cable switch(%d)\n",
+				__func__, ret);
+		return;
+	}
+#endif
 	ret = switch_dev_register(&switch_uart3);
 	if (ret < 0) {
 		pr_err("%s : Failed to register switch_uart3 device\n", __func__);

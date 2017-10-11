@@ -450,7 +450,7 @@ static int ipa_open(struct inode *inode, struct file *filp)
 {
 	struct ipa_context *ctx = NULL;
 
-	IPADBG("ENTER\n");
+	IPADBG_LOW("ENTER\n");
 	ctx = container_of(inode->i_cdev, struct ipa_context, cdev);
 	filp->private_data = ctx;
 
@@ -1827,7 +1827,7 @@ static int ipa_q6_clean_q6_tables(void)
 	u32 max_cmds = ipa_get_max_flt_rt_cmds(ipa_ctx->ipa_num_pipes);
 
 	mem.base = dma_alloc_coherent(ipa_ctx->pdev, 4, &mem.phys_base,
-		GFP_KERNEL);
+		GFP_ATOMIC);
 	if (!mem.base) {
 		IPAERR("failed to alloc DMA buff of size 4\n");
 		return -ENOMEM;
@@ -2937,11 +2937,11 @@ static int ipa_get_clks(struct device *dev)
 
 void _ipa_enable_clks_v2_0(void)
 {
-	IPADBG("enabling gcc_ipa_clk\n");
+	IPADBG_LOW("enabling gcc_ipa_clk\n");
 	if (ipa_clk) {
 		clk_prepare(ipa_clk);
 		clk_enable(ipa_clk);
-		IPADBG("curr_ipa_clk_rate=%d", ipa_ctx->curr_ipa_clk_rate);
+		IPADBG_LOW("curr_ipa_clk_rate=%d", ipa_ctx->curr_ipa_clk_rate);
 		clk_set_rate(ipa_clk, ipa_ctx->curr_ipa_clk_rate);
 		ipa_uc_notify_clk_state(true);
 	} else {
@@ -3073,7 +3073,7 @@ void _ipa_disable_clks_v1_1(void)
 
 void _ipa_disable_clks_v2_0(void)
 {
-	IPADBG("disabling gcc_ipa_clk\n");
+	IPADBG_LOW("disabling gcc_ipa_clk\n");
 	ipa_suspend_apps_pipes(true);
 	ipa_sps_irq_control_all(false);
 	ipa_uc_notify_clk_state(false);
@@ -3094,7 +3094,7 @@ void _ipa_disable_clks_v2_0(void)
 */
 void ipa_disable_clks(void)
 {
-	IPADBG("disabling IPA clocks and bus voting\n");
+	IPADBG_LOW("disabling IPA clocks and bus voting\n");
 
 	ipa_ctx->ctrl->ipa_disable_clks();
 
@@ -3238,7 +3238,7 @@ void ipa2_inc_client_enable_clks(struct ipa_active_client_logging_info *id)
 	ipa_ctx->ipa_active_clients.cnt++;
 	if (ipa_ctx->ipa_active_clients.cnt == 1)
 		ipa_enable_clks();
-	IPADBG("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
+	IPADBG_LOW("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
 	ipa_active_clients_unlock();
 }
 
@@ -3270,7 +3270,7 @@ int ipa2_inc_client_enable_clks_no_block(struct ipa_active_client_logging_info
 	ipa2_active_clients_log_inc(id, true);
 
 	ipa_ctx->ipa_active_clients.cnt++;
-	IPADBG("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
+	IPADBG_LOW("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
 bail:
 	ipa_active_clients_trylock_unlock(&flags);
 
@@ -3298,7 +3298,7 @@ void ipa2_dec_client_disable_clks(struct ipa_active_client_logging_info *id)
 	ipa_active_clients_lock();
 	ipa2_active_clients_log_dec(id, false);
 	ipa_ctx->ipa_active_clients.cnt--;
-	IPADBG("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
+	IPADBG_LOW("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
 	if (ipa_ctx->ipa_active_clients.cnt == 0) {
 		if (ipa_ctx->tag_process_before_gating) {
 			IPA_ACTIVE_CLIENTS_PREP_SPECIAL(log_info,
@@ -3338,7 +3338,7 @@ void ipa_inc_acquire_wakelock(enum ipa_wakelock_ref_client ref_client)
 	ipa_ctx->wakelock_ref_cnt.cnt |= (1 << ref_client);
 	if (ipa_ctx->wakelock_ref_cnt.cnt)
 		__pm_stay_awake(&ipa_ctx->w_lock);
-	IPADBG("active wakelock ref cnt = %d client enum %d\n",
+	IPADBG_LOW("active wakelock ref cnt = %d client enum %d\n",
 		ipa_ctx->wakelock_ref_cnt.cnt, ref_client);
 	spin_unlock_irqrestore(&ipa_ctx->wakelock_ref_cnt.spinlock, flags);
 }
@@ -3359,7 +3359,7 @@ void ipa_dec_release_wakelock(enum ipa_wakelock_ref_client ref_client)
 		return;
 	spin_lock_irqsave(&ipa_ctx->wakelock_ref_cnt.spinlock, flags);
 	ipa_ctx->wakelock_ref_cnt.cnt &= ~(1 << ref_client);
-	IPADBG("active wakelock ref cnt = %d client enum %d\n",
+	IPADBG_LOW("active wakelock ref cnt = %d client enum %d\n",
 		ipa_ctx->wakelock_ref_cnt.cnt, ref_client);
 	if (ipa_ctx->wakelock_ref_cnt.cnt == 0)
 		__pm_relax(&ipa_ctx->w_lock);
@@ -3403,7 +3403,7 @@ int ipa2_set_required_perf_profile(enum ipa_voltage_level floor_voltage,
 	enum ipa_voltage_level needed_voltage;
 	u32 clk_rate;
 
-	IPADBG("floor_voltage=%d, bandwidth_mbps=%u",
+	IPADBG_LOW("floor_voltage=%d, bandwidth_mbps=%u",
 					floor_voltage, bandwidth_mbps);
 
 	if (floor_voltage < IPA_VOLTAGE_UNSPECIFIED ||
@@ -3413,7 +3413,7 @@ int ipa2_set_required_perf_profile(enum ipa_voltage_level floor_voltage,
 	}
 
 	if (ipa_ctx->enable_clock_scaling) {
-		IPADBG("Clock scaling is enabled\n");
+		IPADBG_LOW("Clock scaling is enabled\n");
 		if (bandwidth_mbps >=
 			ipa_ctx->ctrl->clock_scaling_bw_threshold_turbo)
 			needed_voltage = IPA_VOLTAGE_TURBO;
@@ -3423,7 +3423,7 @@ int ipa2_set_required_perf_profile(enum ipa_voltage_level floor_voltage,
 		else
 			needed_voltage = IPA_VOLTAGE_SVS;
 	} else {
-		IPADBG("Clock scaling is disabled\n");
+		IPADBG_LOW("Clock scaling is disabled\n");
 		needed_voltage = IPA_VOLTAGE_NOMINAL;
 	}
 
@@ -3445,13 +3445,13 @@ int ipa2_set_required_perf_profile(enum ipa_voltage_level floor_voltage,
 	}
 
 	if (clk_rate == ipa_ctx->curr_ipa_clk_rate) {
-		IPADBG("Same voltage\n");
+		IPADBG_LOW("Same voltage\n");
 		return 0;
 	}
 
 	ipa_active_clients_lock();
 	ipa_ctx->curr_ipa_clk_rate = clk_rate;
-	IPADBG("setting clock rate to %u\n", ipa_ctx->curr_ipa_clk_rate);
+	IPADBG_LOW("setting clock rate to %u\n", ipa_ctx->curr_ipa_clk_rate);
 	if (ipa_ctx->ipa_active_clients.cnt > 0) {
 		clk_set_rate(ipa_clk, ipa_ctx->curr_ipa_clk_rate);
 		if (ipa_ctx->ipa_hw_mode != IPA_HW_MODE_VIRTUAL)
@@ -3459,10 +3459,10 @@ int ipa2_set_required_perf_profile(enum ipa_voltage_level floor_voltage,
 			    ipa_ctx->ipa_bus_hdl, ipa_get_bus_vote()))
 				WARN_ON(1);
 	} else {
-		IPADBG("clocks are gated, not setting rate\n");
+		IPADBG_LOW("clocks are gated, not setting rate\n");
 	}
 	ipa_active_clients_unlock();
-	IPADBG("Done\n");
+	IPADBG_LOW("Done\n");
 	return 0;
 }
 
@@ -3586,6 +3586,7 @@ void ipa_suspend_handler(enum ipa_irq_type interrupt,
 				 * pipe will be unsuspended as part of
 				 * enabling IPA clocks
 				 */
+				mutex_lock(&ipa_ctx->sps_pm.sps_pm_lock);
 				if (!atomic_read(
 					&ipa_ctx->sps_pm.dec_clients)
 					) {
@@ -3598,6 +3599,7 @@ void ipa_suspend_handler(enum ipa_irq_type interrupt,
 						1);
 					ipa_sps_process_irq_schedule_rel();
 				}
+				mutex_unlock(&ipa_ctx->sps_pm.sps_pm_lock);
 			} else {
 				resource = ipa2_get_rm_resource_from_ep(i);
 				res = ipa_rm_request_resource_with_timer(
@@ -3756,6 +3758,13 @@ static int ipa_init(const struct ipa_plat_drv_res *resource_p,
 		goto fail_mem_ctx;
 	}
 
+	ipa_ctx->logbuf = ipc_log_context_create(IPA_IPC_LOG_PAGES, "ipa", 0);
+	if (ipa_ctx->logbuf == NULL) {
+		IPAERR("failed to get logbuf\n");
+		result = -ENOMEM;
+		goto fail_logbuf;
+	}
+
 	ipa_ctx->pdev = ipa_dev;
 	ipa_ctx->uc_pdev = ipa_dev;
 	ipa_ctx->smmu_present = smmu_info.present;
@@ -3767,6 +3776,8 @@ static int ipa_init(const struct ipa_plat_drv_res *resource_p,
 	ipa_ctx->ipa_wrapper_size = resource_p->ipa_mem_size;
 	ipa_ctx->ipa_hw_type = resource_p->ipa_hw_type;
 	ipa_ctx->ipa_hw_mode = resource_p->ipa_hw_mode;
+	ipa_ctx->ipa_uc_monitor_holb =
+		resource_p->ipa_uc_monitor_holb;
 	ipa_ctx->use_ipa_teth_bridge = resource_p->use_ipa_teth_bridge;
 	ipa_ctx->ipa_bam_remote_mode = resource_p->ipa_bam_remote_mode;
 	ipa_ctx->modem_cfg_emb_pipe_flt = resource_p->modem_cfg_emb_pipe_flt;
@@ -4290,6 +4301,8 @@ fail_bus_reg:
 fail_bind:
 	kfree(ipa_ctx->ctrl);
 fail_mem_ctrl:
+	ipc_log_context_destroy(ipa_ctx->logbuf);
+fail_logbuf:
 	kfree(ipa_ctx);
 	ipa_ctx = NULL;
 fail_mem_ctx:
@@ -4307,6 +4320,7 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	ipa_drv_res->ipa_pipe_mem_size = IPA_PIPE_MEM_SIZE;
 	ipa_drv_res->ipa_hw_type = 0;
 	ipa_drv_res->ipa_hw_mode = 0;
+	ipa_drv_res->ipa_uc_monitor_holb = false;
 	ipa_drv_res->ipa_bam_remote_mode = false;
 	ipa_drv_res->modem_cfg_emb_pipe_flt = false;
 	ipa_drv_res->ipa_wdi2 = false;
@@ -4330,6 +4344,14 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 	else
 		IPADBG(": found ipa_drv_res->ipa_hw_mode = %d",
 				ipa_drv_res->ipa_hw_mode);
+
+	/* Check ipa_uc_monitor_holb enabled or disabled */
+	ipa_drv_res->ipa_uc_monitor_holb =
+		of_property_read_bool(pdev->dev.of_node,
+		"qcom,ipa-uc-monitor-holb");
+	IPADBG(": ipa uc monitor holb = %s\n",
+		ipa_drv_res->ipa_uc_monitor_holb
+		? "Enabled" : "Disabled");
 
 	/* Get IPA WAN / LAN RX  pool sizes */
 	result = of_property_read_u32(pdev->dev.of_node,

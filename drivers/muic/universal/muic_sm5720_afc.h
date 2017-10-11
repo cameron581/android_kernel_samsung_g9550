@@ -38,12 +38,18 @@ enum {
 	SUPPORT_QC_20V	= 20,
 };
 
+enum {
+	AFC_5V	= 5,
+	AFC_9V	= 9,
+};
+
 int muic_check_afc_state(int state);
 int muic_torch_prepare(int state);
 void sm5720_afc_delay_check_state(int state);
 void sm5720_afc_init_state(muic_data_t *pmuic);
 int sm5720_afc_set_voltage(int vol);
 int sm5720_afc_restart(void);
+int sm5720_afc_dpreset(void);
 int muic_sm5720_set_afc(bool enable);
 
 int sm5720_set_afc_ctrl_reg(struct regmap_desc *pdesc, int shift, bool on);

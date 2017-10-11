@@ -154,7 +154,7 @@ struct afe_dsm_filter_get_params_t {
 	uint32_t STImpedModel_Flag;
 	uint32_t Q_Notch;
 	uint32_t Power_Measurement;
-	uint32_t Reserve_1;
+	uint32_t v_validation;
 	uint32_t Reserve_2;
 	uint32_t Reserve_3;
 	uint32_t Reserve_4;

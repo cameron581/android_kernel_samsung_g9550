@@ -50,6 +50,11 @@
 #include "lpm-levels.h"
 #include "lpm-workarounds.h"
 
+#ifdef CONFIG_SEC_DEBUG_SUMMARY
+#include <linux/qcom/sec_debug.h>
+#include <linux/qcom/sec_debug_summary.h>
+#endif
+
 #ifdef CONFIG_SEC_PM
 #include <linux/regulator/consumer.h>
 #include <linux/qpnp/pin.h>
@@ -1021,9 +1026,14 @@ static int cluster_select(struct lpm_cluster *cluster, bool from_idle,
 	uint32_t cpupred_us = 0, pred_us = 0;
 	int pred_mode = 0, predicted = 0;
 
+	unsigned int debug;
+	int wait_for_rpm_ack[2] = {-1, 1};
+
 	if (!cluster)
 		return -EINVAL;
 
+	debug = (cluster == lpm_root_node) && (from_idle == false)
+			&& (num_online_cpus() == 1);
 	sleep_us = (uint32_t)get_cluster_sleep_time(cluster, NULL,
 						from_idle, &cpupred_us);
 
@@ -1079,13 +1089,16 @@ static int cluster_select(struct lpm_cluster *cluster, bool from_idle,
 		if (suspend_in_progress && from_idle && level->notify_rpm)
 			continue;
 
-		if (level->notify_rpm && msm_rpm_waiting_for_ack())
+		if (level->notify_rpm && msm_rpm_waiting_for_ack()) {
+			wait_for_rpm_ack[i] = 1;
 			continue;
+		}
 
 		best_level = i;
 
-		if (predicted ? (pred_us <= pwr_params->max_residency)
-			: (sleep_us <= pwr_params->max_residency))
+		if (from_idle &&
+			(predicted ? (pred_us <= pwr_params->max_residency)
+			: (sleep_us <= pwr_params->max_residency)))
 			break;
 	}
 
@@ -1096,7 +1109,32 @@ static int cluster_select(struct lpm_cluster *cluster, bool from_idle,
 
 	trace_cluster_pred_select(cluster->cluster_name, best_level, sleep_us,
 						latency_us, predicted, pred_us);
+	if (debug && (best_level < 0)) {
+		struct lpm_cluster_level *level;
+		struct power_params *pwr_params;
 
+		pr_info("[%s] from_idle : %d, latency_us : %d, sleep_us : %d,\
+			in_sync : %lx, suspend_in_progress : %d, weight : %d\n",
+			__func__, from_idle, latency_us, sleep_us,
+			cluster->num_children_in_sync.bits[0], suspend_in_progress,
+			cpumask_weight(cpu_online_mask));
+		pr_info("[%s] predicted : %d, pred_us : %d\n",
+			__func__, predicted, pred_us);
+		for (i = 0; i < cluster->nlevels; i++) {
+			level = &cluster->levels[i];
+			pwr_params = &level->pwr;
+			pr_info("[%s] i: %d, allow : %d\n",
+				__func__, i, lpm_cluster_mode_allow(cluster, i, from_idle));
+			pr_info("[%s] i: %d, last_core_only : %d, votes : %lx\n",
+				__func__, i, level->last_core_only,
+				level->num_cpu_votes.bits[0]);
+			pr_info("[%s] i: %d, latency: %d, overhead: %d, residency: %d\n",
+				__func__, i, pwr_params->latency_us, 
+				pwr_params->time_overhead_us, pwr_params->max_residency);
+			pr_info("[%s] i: %d, notify_rpm: %d, wait_for_rpm_ack: %d\n",
+				__func__, i, level->notify_rpm, wait_for_rpm_ack[i]);
+		}
+	}
 	return best_level;
 }
 
@@ -1114,9 +1152,20 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 {
 	struct lpm_cluster_level *level = &cluster->levels[idx];
 	int ret, i;
+	struct cpumask online_cpus;
+	unsigned int debug = (cluster == lpm_root_node) &&
+						(from_idle == false) && (num_online_cpus() == 1);
 
+	cpumask_and(&online_cpus, &cluster->num_children_in_sync,
+		cpu_online_mask);
 	if (!cpumask_equal(&cluster->num_children_in_sync, &cluster->child_cpus)
-			|| is_IPI_pending(&cluster->num_children_in_sync)) {
+			|| is_IPI_pending(&online_cpus)) {
+		if (debug) {
+			pr_err("[%s] in_sync : %lx, child_cpus : %lx, IPI pending : %d\n",
+				__func__, cluster->num_children_in_sync.bits[0],
+				cluster->child_cpus.bits[0],
+				is_IPI_pending(&cluster->num_children_in_sync));
+			}
 		return -EPERM;
 	}
 
@@ -1136,8 +1185,12 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 
 	for (i = 0; i < cluster->ndevices; i++) {
 		ret = set_device_mode(cluster, i, level);
-		if (ret)
+		if (ret) {
+			if (debug)
+				pr_err("[%s] i : %d, set_device_mode_fail\n",
+					__func__, i);
 			goto failed_set_mode;
+		}
 	}
 
 	if (level->notify_rpm) {
@@ -1155,11 +1208,11 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 			goto failed_set_mode;
 		}
 
-		us = us + 1;
+		us = (us + 1) * 1000;
 		clear_predict_history();
 		clear_cl_predict_history();
 
-		do_div(us, USEC_PER_SEC/SCLK_HZ);
+		do_div(us, NSEC_PER_SEC/SCLK_HZ);
 		msm_mpm_enter_sleep(us, from_idle, cpumask);
 	}
 
@@ -1198,6 +1251,8 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	int i;
 	int predicted = 0;
 
+	unsigned int debug =0;
+
 	if (!cluster)
 		return;
 
@@ -1205,6 +1260,9 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 		return;
 
 	spin_lock(&cluster->sync_lock);
+	debug = (cluster == lpm_root_node) && (from_idle == false)
+		&& (child_idx == 3) && (cpu->bits[0] == 0xF)
+		&& (num_online_cpus() == 1);
 	cpumask_or(&cluster->num_children_in_sync, cpu,
 			&cluster->num_children_in_sync);
 
@@ -1224,8 +1282,13 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	 */
 
 	if (!cpumask_equal(&cluster->num_children_in_sync,
-				&cluster->child_cpus))
+				&cluster->child_cpus)) {
+			if (debug)
+				pr_info("[%s] in_sync : %lx, child_cpus : %lx\n",
+					__func__, cluster->num_children_in_sync.bits[0],
+					cluster->child_cpus.bits[0]);
 		goto failed;
+	}
 
 	i = cluster_select(cluster, from_idle, &predicted);
 
@@ -1258,6 +1321,9 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	spin_unlock(&cluster->sync_lock);
 	return;
 failed:
+	if (debug && (cluster->last_level != 1 )) {
+		pr_err("[%s] failed to set system to pc\n", __func__);
+	}
 	spin_unlock(&cluster->sync_lock);
 	cluster->stats->sleep_time = 0;
 	return;
@@ -1946,6 +2012,8 @@ static int lpm_probe(struct platform_device *pdev)
 				__func__);
 		goto failed;
 	}
+
+	summary_set_lpm_info_cci(virt_to_phys((void *)&lpm_root_node->last_level));
 
 	return 0;
 failed:

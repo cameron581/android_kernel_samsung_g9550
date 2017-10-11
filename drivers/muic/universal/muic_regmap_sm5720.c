@@ -552,9 +552,6 @@ static void sm5720_get_fromatted_dump(struct regmap_desc *pdesc, char *mesg)
 	sprintf(mesg+strlen(mesg), "H3C:%x ", val);
 	val = i2c_smbus_read_byte_data(muic->i2c, 0x3D);
 	sprintf(mesg+strlen(mesg), "H3D:%x ", val);
-
-	if(strlen(mesg) > 255)
-		mesg[256] = '\0';
 }
 
 static int sm5720_get_sizeof_regmap(void)

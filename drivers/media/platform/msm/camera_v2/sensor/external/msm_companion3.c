@@ -182,10 +182,10 @@ static int msm_companion_append_string(uint8_t *str, int offset, uint8_t *substr
 	return 1;
 }
 
-static int msm_companion_fw_binary_set(struct companion_device *companion_dev, struct companion_fw_binary_param fw_bin,
-	uint8_t *sensor_name)
+static int msm_companion_fw_binary_set(struct companion_device *companion_dev, struct companion_fw_binary_param fw_bin)
 {
 	long ret = 0;
+	uint8_t sensor_name[64] = {0,};
 
 	// Setting fw binary
 	if (fw_bin.size != 0 && fw_bin.buffer != NULL) {
@@ -220,8 +220,15 @@ static int msm_companion_fw_binary_set(struct companion_device *companion_dev, s
 		pr_err("[syscamera][%s::%d][Error] Failed to copy version info from user-space\n", __FUNCTION__, __LINE__);
 		return -EFAULT;
 	}
+	if (copy_from_user(sensor_name, fw_bin.sensor_name, 64)) {
+		pr_err("[syscamera][%s::%d][Error] Failed to copy sensor name from user-space\n",
+			__FUNCTION__, __LINE__);
+		return -EFAULT;
+	}
 
-	pr_err("[%s:%d] Version string from EEPROM = %s, bin size = %d", __FUNCTION__, __LINE__, companion_dev->eeprom_fw_ver, companion_dev->eeprom_fw_bin_size);
+	pr_err("[%s:%d] Version string from EEPROM = %s, bin size = %d, sensor name %s",
+		__FUNCTION__, __LINE__, companion_dev->eeprom_fw_ver,
+		companion_dev->eeprom_fw_bin_size, sensor_name);
 
 	//Updating path for fw binary (companion_fw_path + sensor_version + companion_fw_name + sensor_name + extension)
 	{
@@ -1607,11 +1614,12 @@ static int msm_companion_get_crc(struct companion_device *companion_dev, struct 
 	return ret;
 }
 
-static int msm_companion_stream_on(struct msm_camera_i2c_client *companion_i2c_dev, uint16_t enable)
+static int msm_companion_stream_on(struct msm_camera_i2c_client *companion_i2c_dev)
 {
 	int ret = 0;
 
-	pr_info("[syscamera][%s::%d][E][enable::%d][wdr_mode::%d]\n", __FUNCTION__, __LINE__, enable, wdr_mode);
+	pr_info("[syscamera][%s::%d][E][wdr_mode::%d]\n", __FUNCTION__, __LINE__, wdr_mode);
+
 	//wdr mode setting
 	if (wdr_mode == 0) {	// WDR off
 		CDBG("[syscamera][%s::%d][E][WDR : %d]\n", __FUNCTION__, __LINE__, wdr_mode);
@@ -1644,19 +1652,36 @@ static int msm_companion_stream_on(struct msm_camera_i2c_client *companion_i2c_d
 		ret = companion_i2c_dev->i2c_func_tbl->i2c_write(
 				companion_i2c_dev, LOWER(HOST_INTRP_ChangeConfig), 0x0001, MSM_CAMERA_I2C_WORD_DATA);
 	}
-	wdr_mode = -1;
 
 	// a clk control needs to be enabled 03.Dec.2013
 	ret = companion_i2c_dev->i2c_func_tbl->i2c_write(
-			companion_i2c_dev, 0x6800, enable, MSM_CAMERA_I2C_WORD_DATA);
+			companion_i2c_dev, 0x6800, 0x1, MSM_CAMERA_I2C_WORD_DATA);
 
 	if(ret < 0) {
-		pr_err("[syscamera][%s::%d][Error on streaming control][enable::%d]\n", __FUNCTION__, __LINE__, enable);
+		pr_err("[syscamera][%s::%d][Error on streaming control]\n", __FUNCTION__, __LINE__);
 	}
 
 	return ret;
 }
 
+static int msm_companion_stream_off(struct msm_camera_i2c_client *companion_i2c_dev)
+{
+	int ret = 0;
+
+	wdr_mode = -1;
+
+	pr_info("[syscamera][%s::%d][E][wdr_mode::%d]\n", __FUNCTION__, __LINE__, wdr_mode);
+
+	// a clk control needs to be enabled 03.Dec.2013
+	ret = companion_i2c_dev->i2c_func_tbl->i2c_write(
+			companion_i2c_dev, 0x6800, 0x0, MSM_CAMERA_I2C_WORD_DATA);
+
+	if(ret < 0) {
+		pr_err("[syscamera][%s::%d][Error on streaming control]\n", __FUNCTION__, __LINE__);
+	}
+
+	return ret;
+}
 
 static int msm_companion_set_mode(struct companion_device *companion_dev, struct msm_camera_i2c_reg_setting mode_setting)
 {
@@ -2094,6 +2119,8 @@ static int msm_companion_init(struct companion_device *companion_dev, uint32_t s
 	}
 	stats2_len = size;
 
+	wdr_mode = -1;
+
 	init_completion(&companion_dev->wait_complete);
 	spin_lock_init(&companion_dev->isr_resource.comp_tasklet_lock);
 	INIT_LIST_HEAD(&companion_dev->isr_resource.comp_tasklet_q);
@@ -2184,6 +2211,113 @@ static int32_t msm_companion_get_subdev_id(struct companion_device *companion_de
 	CDBG("[syscamera][%s::%d]subdev_id %d\n", __FUNCTION__, __LINE__, *subdev_id);
 	return 0;
 }
+
+#if defined (CONFIG_CAMERA_SYSFS_CAMFW_ALL)
+int camera_fw_show_sub(char *path, char *buf, int startPos, int readsize)
+{
+	struct file *fp = NULL;
+	long fsize, nread;
+	int ret = 0;
+
+        CDBG("%s, %d: path %s", __func__, __LINE__, path);
+	fp = filp_open(path, O_RDONLY, 0660);
+	if (IS_ERR(fp)) {
+		pr_err("%s, %d: Camera: Failed open phone firmware", __func__, __LINE__);
+		ret = -EIO;
+		goto ERROR;
+	}
+
+	fsize = fp->f_path.dentry->d_inode->i_size;
+
+	if (startPos < 0) {
+		fp->f_pos = fsize + startPos;
+	} else {
+		fp->f_pos = startPos;
+	}
+
+	fsize = readsize;
+	nread = vfs_read(fp, (char __user *)buf, fsize, &fp->f_pos);
+	if (nread != fsize) {
+		pr_err("failed to read firmware file, %ld Bytes", nread);
+		ret = -EIO;
+	}
+
+ERROR:
+	if (fp) {
+		filp_close(fp, current->files);
+		fp = NULL;
+	}
+
+	return ret;
+}
+
+static ssize_t msm_companion_get_fw_all(char *buf)
+{
+        #define VER_MAX_SIZE 100
+	int ret;
+	mm_segment_t old_fs;
+	char fw_ver[VER_MAX_SIZE] = {0, };
+	char output[64] = {0, };
+	char path[128] = {0, };
+	int cnt = 0, loop = 0, i;
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	loop = sizeof(companion_fw_list) / sizeof(char *);
+	for(i = 0; i < loop; i++) {
+		sprintf(path, CAMERA_SYSTEM_FW_PATH"/%s", companion_fw_list[i]);
+		ret = camera_fw_show_sub(path, fw_ver,
+						(-16), 11);
+		if (ret == 0) {
+			if (cnt++ > 0)
+				strcat(output, ",");
+			strcat(output, fw_ver);
+			pr_err("%s, %d: fw_ver %s", __func__, __LINE__, fw_ver);
+			memset(fw_ver, 0, sizeof(fw_ver));
+		}
+	}
+	set_fs(old_fs);
+
+	return sprintf(buf, ";[COMPANION]%s", output);
+}
+
+static long msm_companion_fw_info(struct companion_device *companion_dev, void __user *arg)
+{
+	struct msm_phone_fw_data_t32 *data32 = (struct msm_phone_fw_data_t32 *)arg;
+	struct msm_phone_fw_data_t cfg;
+	int rc = 0;
+	int16_t valid = 0;
+	char fw[MAX_COMPANION_FW_INFO] = {0, };
+
+	if (!companion_dev || !data32) {
+		pr_err("[syscamera][%s::%d]companion_dev %p, data %p\n", __FUNCTION__, __LINE__,
+			companion_dev, data32);
+		return -EINVAL;
+	}
+
+	rc = msm_companion_get_fw_all(fw);
+	if (rc < 0) {
+		pr_err("[syscamera][%s::%d] error rc = %d\n", __FUNCTION__, __LINE__, rc);
+	} else {
+		cfg.companion_fw_all = compat_ptr(data32->companion_fw_all);
+		if (copy_to_user(cfg.companion_fw_all, fw, strlen(fw))) {
+			pr_err("[syscamera][%s::%d] copy_to_user failed\n", __FUNCTION__, __LINE__);
+			rc = -EFAULT;
+		} else {
+			valid = 1;
+			cfg.valid_companion_fw_info = compat_ptr(data32->valid_companion_fw_info);
+			if (copy_to_user(cfg.valid_companion_fw_info, &valid, sizeof(valid))) {
+				pr_err("[syscamera][%s::%d] copy_to_user failed\n", __FUNCTION__, __LINE__);
+				rc = -EFAULT;
+			}
+		}
+	}
+
+	pr_info("[syscamera][%s::%d] fw %s\n", __FUNCTION__, __LINE__, cfg.companion_fw_all);
+        return rc;
+}
+#endif
 
 static long msm_companion_subdev_ioctl(struct v4l2_subdev *sd,
 			unsigned int cmd, void *arg)
@@ -2407,10 +2541,7 @@ static int32_t msm_companion_cmd32(struct companion_device *companion_dev, void 
 		cdata.cfg.fw_bin.size = cdata32->cfg.fw_bin.size;
 		cdata.cfg.fw_bin.sensor_name = compat_ptr(cdata32->cfg.fw_bin.sensor_name);
 
-		pr_err("[%s::%d] version = %s, hwinfo = %s, size = %d, sensor_name=%s\n", __FUNCTION__, __LINE__,
-			cdata.cfg.fw_bin.version, cdata.cfg.fw_bin.hwinfo, cdata.cfg.fw_bin.size, cdata.cfg.fw_bin.sensor_name);
-
-		rc = msm_companion_fw_binary_set(companion_dev, cdata.cfg.fw_bin, cdata.cfg.fw_bin.sensor_name);
+		rc = msm_companion_fw_binary_set(companion_dev, cdata.cfg.fw_bin);
 		if (rc < 0) {
 			pr_err("[syscamera][%s::%d] error on Setting fw binary\n", __FUNCTION__, __LINE__);
 			break;
@@ -2468,9 +2599,10 @@ static int32_t msm_companion_cmd32(struct companion_device *companion_dev, void 
 			pr_err("[syscamera][%s::%d] error on loading firmware\n", __FUNCTION__, __LINE__);
 #if defined(CONFIG_USE_CAMERA_HW_BIG_DATA)
 			if (rc == -EIO) {
-				if (!msm_is_sec_get_sensor_position(&hw_cam_position)) {
-					if (hw_cam_position != NULL) {
-						if (*hw_cam_position == BACK_CAMERA_B) {
+				msm_is_sec_get_sensor_position(&hw_cam_position);
+				if (hw_cam_position != NULL) {
+					switch(*hw_cam_position) {
+						case BACK_CAMERA_B:
 							if (!msm_is_sec_get_rear_hw_param(&hw_param)) {
 								if (hw_param != NULL) {
 									pr_err("[HWB_DBG][R][CC] Err\n");
@@ -2478,35 +2610,54 @@ static int32_t msm_companion_cmd32(struct companion_device *companion_dev, void 
 									hw_param->need_update_to_file = TRUE;
 								}
 							}
-						}
-						else if ((*hw_cam_position == FRONT_CAMERA_B) && !msm_is_sec_get_secure_mode(&hw_cam_secure)) {
+							break;
+
+						case FRONT_CAMERA_B:
+							msm_is_sec_get_secure_mode(&hw_cam_secure);
 							if (hw_cam_secure != NULL) {
-								if (!(*hw_cam_secure)) {
-									if (!msm_is_sec_get_front_hw_param(&hw_param)) {
-										if (hw_param != NULL) {
-											pr_err("[HWB_DBG][F][CC] Err\n");
-											hw_param->i2c_comp_err_cnt++;
-											hw_param->need_update_to_file = TRUE;
+								switch(*hw_cam_secure) {
+									case FALSE:
+										if (!msm_is_sec_get_front_hw_param(&hw_param)) {
+											if (hw_param != NULL) {
+												pr_err("[HWB_DBG][F][CC] Err\n");
+												hw_param->i2c_comp_err_cnt++;
+												hw_param->need_update_to_file = TRUE;
+											}
 										}
-									}
-								}
-								else if ((*hw_cam_secure)) {
-									if (!msm_is_sec_get_iris_hw_param(&hw_param)) {
-										if (hw_param != NULL) {
-											pr_err("[HWB_DBG][I][CC] Err\n");
-											hw_param->i2c_comp_err_cnt++;
-											hw_param->need_update_to_file = TRUE;
+										break;
+
+									case TRUE:
+										if (!msm_is_sec_get_iris_hw_param(&hw_param)) {
+											if (hw_param != NULL) {
+												pr_err("[HWB_DBG][I][CC] Err\n");
+												hw_param->i2c_comp_err_cnt++;
+												hw_param->need_update_to_file = TRUE;
+											}
 										}
-									}
-								}
-								else {
-									//Check.
+										break;
+
+									default:
+										pr_err("[HWB_DBG][F_I][CC] Unsupport\n");
+										break;
 								}
 							}
-						}
-						else {
-							//Check.
-						}
+							break;
+
+#if defined(CONFIG_SAMSUNG_MULTI_CAMERA)
+						case AUX_CAMERA_B:
+							if (!msm_is_sec_get_rear2_hw_param(&hw_param)) {
+								if (hw_param != NULL) {
+									pr_err("[HWB_DBG][R2][CC] Err\n");
+									hw_param->i2c_comp_err_cnt++;
+									hw_param->need_update_to_file = TRUE;
+								}
+							}
+							break;
+#endif
+
+						default:
+							pr_err("[HWB_DBG][NON][CC] Unsupport\n");
+							break;
 					}
 				}
 			}
@@ -2607,11 +2758,13 @@ static int32_t msm_companion_cmd32(struct companion_device *companion_dev, void 
 	case COMPANION_CMD_STREAM_ON:
 		cdata.cfg.stream_on = cdata32->cfg.stream_on;
 		CDBG("[syscamera][%s::%d] Companion stream on[enable::%d]\n", __FUNCTION__, __LINE__, cdata.cfg.stream_on);
-		if (cdata.cfg.stream_on == 1)
+		if (cdata.cfg.stream_on == 1) {
 			atomic_set(&comp_streamon_set, 1);
-		else
+			rc = msm_companion_stream_on(client);
+		} else {
 			atomic_set(&comp_streamon_set, 0);
-		rc = msm_companion_stream_on(client, cdata.cfg.stream_on);
+			rc = msm_companion_stream_off(client);
+		}
 		if (rc < 0) {
 			pr_err("[syscamera][%s::%d] msm_companion_stream_on failed\n", __FUNCTION__, __LINE__);
 			return -EFAULT;
@@ -2768,6 +2921,12 @@ static long msm_companion_subdev_ioctl32(struct v4l2_subdev *sd,
 	case VIDIOC_MSM_COMPANION_IO_CFG: //203
 		rc = msm_companion_cmd32(companion_dev, arg);
 		break;
+#if defined (CONFIG_CAMERA_SYSFS_CAMFW_ALL)
+	case  VIDIOC_MSM_PHONE_FW_INFO:
+		pr_err("[syscamera][%s::%d]VIDIOC_MSM_PHONE_FW_INFO\n", __FUNCTION__, __LINE__);
+		rc = msm_companion_fw_info(companion_dev, arg);
+		break;
+#endif
 	case MSM_SD_SHUTDOWN:
 		rc = msm_companion_release(companion_dev);
 		break;
@@ -2789,6 +2948,8 @@ static long msm_companion_subdev_do_ioctl32(
 	CDBG("[syscamera][%s::%d] Enter cmd(%d)\n", __FUNCTION__, __LINE__, _IOC_NR(cmd));
 	if (cmd == VIDIOC_MSM_COMPANION_IO_CFG32)
 		cmd = VIDIOC_MSM_COMPANION_IO_CFG;
+	if (cmd == VIDIOC_MSM_PHONE_FW_INFO32)
+		cmd = VIDIOC_MSM_PHONE_FW_INFO;
 
 	return msm_companion_subdev_ioctl32(sd, cmd, arg);
 #else

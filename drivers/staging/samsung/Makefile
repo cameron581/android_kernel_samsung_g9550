@@ -13,3 +13,5 @@ obj-				:=
 # Samsung sec sysfs Feature
 obj-$(CONFIG_SEC_SYSFS)		+= sec_sysfs.o
 obj-$(CONFIG_SEC_FD_DETECT) += sec_fd_detect.o
+# Samsung sec ABC Feature
+obj-$(CONFIG_SEC_ABC)		+= sec_abc.o

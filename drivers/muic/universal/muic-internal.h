@@ -208,6 +208,8 @@ typedef struct _muic_data_t {
 	/* Add Muic structure's member variable for VZW requirement(Rp0 Cable) */
 	bool			is_ccic_attach;
 	bool			retry_afc;
+
+	int				ccic_rp;
 	
 	struct hv_data		*phv;
 

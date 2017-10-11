@@ -31,6 +31,7 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 */
 #include "ss_dsi_panel_S6E3HA6_AMS622MR01.h"
 #include "ss_dsi_mdnie_S6E3HA6_AMS622MR01.h"
+#include "gct_test_pattern_img.h"
 #include "../../mdss_dsi.h"
 
 /* AOD Mode status on AOD Service */
@@ -108,20 +109,26 @@ static int mdss_panel_on_pre(struct mdss_dsi_ctrl_pdata *ctrl)
 				i_poc_buffer[3]);
 
 		/*
-		 * Update REBh 4th param to 0xFF or 0x33
+		 * Update REBh 4th param to 0xFF or 0x64
 		 */
 		mdss_init_panel_lpm_reg_offset(ctrl, on_reg_list, on_cmd_list,
 				sizeof(on_cmd_list) / sizeof(on_cmd_list[0]));
 
 		if ((on_reg_list[0][1] != -EINVAL) &&\
 			(vdd->octa_id_dsi[ctrl->ndx][1] == 0x1)) {
-			on_cmd_list[0]->cmds[on_reg_list[0][1]].payload[4] = i_poc_buffer[3];
-			LCD_DEBUG("Update POC register\n");
+			if (i_poc_buffer[3] == 0x33)
+				i_poc_buffer[3] = 0x64;
+
+			on_cmd_list[0]->cmds[on_reg_list[0][1]].payload[4] =
+				i_poc_buffer[3];
+
+			LCD_DEBUG("Update POC register, 0x%02x\n",
+					on_cmd_list[0]->cmds[on_reg_list[0][1]].payload[4]);
 		}
 
 		LCD_DEBUG("[POC] DSI%d: octa_id:%d, poc_buffer:%02x, index:%d\n",
 				ctrl->ndx,
-				vdd->octa_id_dsi[ctrl->ndx][2],
+				vdd->octa_id_dsi[ctrl->ndx][1],
 				i_poc_buffer[3],
 				on_reg_list[0][1]);
 	} else {
@@ -1780,11 +1787,15 @@ static void dsi_update_mdnie_data(void)
 	mdnie_data.dsi0_white_default_r = 0xff;
 	mdnie_data.dsi0_white_default_g = 0xff;
 	mdnie_data.dsi0_white_default_b = 0xff;
-	mdnie_data.dsi0_white_rgb_enabled = 0;
 	mdnie_data.dsi1_white_default_r = 0xff;
 	mdnie_data.dsi1_white_default_g = 0xff;
 	mdnie_data.dsi1_white_default_b = 0xff;
-	mdnie_data.dsi1_white_rgb_enabled = 0;
+	mdnie_data.dsi0_white_balanced_r = 0;
+	mdnie_data.dsi0_white_balanced_g = 0;
+	mdnie_data.dsi0_white_balanced_b = 0;
+	mdnie_data.dsi1_white_balanced_r = 0;
+	mdnie_data.dsi1_white_balanced_g = 0;
+	mdnie_data.dsi1_white_balanced_b = 0;
 	mdnie_data.dsi0_scr_step_index = MDNIE_STEP1_INDEX;
 	mdnie_data.dsi1_scr_step_index = MDNIE_STEP1_INDEX;
 }
@@ -1810,6 +1821,178 @@ static void copr_init(struct samsung_display_driver_data *vdd)
 	LCD_INFO("COPR enabled.. \n");
 
 	return;
+}
+
+static int mdss_gct_read(struct samsung_display_driver_data *vdd)
+{
+	u8 valid_checksum[4] = {0x8b, 0x8b, 0x8b, 0x8b};
+	int res;
+
+	if (vdd->gct.on) {
+		if (!memcmp(vdd->gct.checksum, valid_checksum, 4))
+			res = GCT_RES_CHECKSUM_PASS;
+		else
+			res = GCT_RES_CHECKSUM_NG;
+	}
+	else {
+		res = GCT_RES_CHECKSUM_OFF;
+	}
+
+	return res;
+}
+
+#define PANEL_WIDTH	1440
+#define PANEL_HEIGHT	2960
+static int mdss_gct_init_pattern_buf(struct samsung_display_driver_data *vdd,
+			struct gct_pattern *pat, u8 *slice_pat, int slice_size)
+{
+	int tot_size;
+	int copy_size;
+	int remain;
+	int pos;
+
+	tot_size = (PANEL_WIDTH	* PANEL_HEIGHT / 3) * 3;
+	pat->buf = vmalloc(tot_size);
+	if (unlikely(!pat->buf)) {
+		LCD_ERR("%s: fail to allocate gct pattern1\n", __func__);
+		return -ENOMEM;
+	}
+
+	pat->size = tot_size;
+	remain = tot_size;
+	pos = 0;
+	while (remain) {
+		if (remain > slice_size)
+			copy_size = slice_size;
+		else
+			copy_size = remain;
+
+		memcpy(pat->buf + pos, slice_pat, copy_size);
+
+		pos += copy_size;
+		remain -= copy_size;
+	}
+
+	LCD_INFO("tot_size=%d, slice_size=%d\n", tot_size, slice_size);
+	return 0;
+}
+
+static int mdss_gct_write(struct samsung_display_driver_data *vdd)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl;
+	struct mdss_overlay_private *mdp5_data;
+	u8 *checksum;
+	int i;
+	/* vddm set, 0x0: 1.0V, 0x10: 0.9V, 0x30: 1.1V */
+	u8 vddm_set[MAX_VDDM] = {0x0, 0x10, 0x30};
+	int ret = 0;
+
+	LCD_INFO("+\n");
+	ctrl = samsung_get_dsi_ctrl(vdd);
+	if (IS_ERR_OR_NULL(ctrl)) {
+		LCD_ERR("ctrl is null..");
+		return -ENODEV;;
+	}
+
+	/* alloc and copy repeated pattern */
+	ret = mdss_gct_init_pattern_buf(vdd, &vdd->gct.pat1,
+			pattern_line_1, sizeof(pattern_line_1));
+	if (unlikely(ret))
+		goto err_init_pat;
+
+	ret = mdss_gct_init_pattern_buf(vdd, &vdd->gct.pat2,
+			pattern_line_2, sizeof(pattern_line_2));
+	if (unlikely(ret))
+		goto err_init_pat;
+
+	/* prevent sw reset to trigger esd recovery */
+	LCD_INFO("disable esd interrupt\n");
+	if (vdd->esd_recovery.esd_irq_enable)
+		vdd->esd_recovery.esd_irq_enable(false, true, (void *)vdd);
+
+	/* block updating frame in DDI GRAM */
+	mdp5_data = mfd_to_mdp5_data(vdd->mfd_dsi[DISPLAY_1]);
+	mutex_lock(&mdp5_data->list_lock);
+	msleep(17); /* commit flush time in commit buf list */
+
+	/* enter exclusive mode*/
+	mutex_lock(&vdd->exclusive_tx.ex_tx_lock);
+	vdd->exclusive_tx.enable = 1;
+	for (i = TX_GCT_ENTER; i <= TX_GCT_EXIT; i++)
+		mdss_samsung_set_exclusive_tx_packet(ctrl, i, 1);
+	mdss_samsung_set_exclusive_tx_packet(ctrl, TX_DDI_RAM_IMG_DATA, 1);
+	mdss_samsung_set_exclusive_tx_packet(ctrl, TX_REG_READ_POS, 1);
+
+	checksum = vdd->gct.checksum;
+	for (i = VDDM_LV; i < MAX_VDDM; i++) {
+		struct dsi_panel_cmds *vddm_cmds;
+
+		LCD_INFO("TX_GCT_ENTER\n");
+		mdss_samsung_send_cmd(ctrl, TX_GCT_ENTER);
+
+		/* update vddm packet to control VDDM */
+		vddm_cmds = mdss_samsung_cmds_select(ctrl, TX_GCT_VDDM_CTRL, NULL);
+		vddm_cmds->cmds[1].payload[1] = vddm_set[i];
+		LCD_INFO("TX_GCT_VDDM_CTRL: pac=%x\n", vddm_set[i]);
+		mdss_samsung_send_cmd(ctrl, TX_GCT_VDDM_CTRL);
+
+		LCD_INFO("TX_GCT_TEST_PATTERN_1\n");
+		mdss_samsung_write_ddi_ram(ctrl, MIPI_TX_TYPE_GRAM,
+				vdd->gct.pat1.buf, vdd->gct.pat1.size);
+		msleep(300);
+
+		mdss_samsung_panel_data_read(ctrl,
+				get_panel_rx_cmds(ctrl, RX_GCT_CHECKSUM),
+				checksum++, LEVEL_KEY_NONE);
+
+		LCD_INFO("checksum %x\n", *(checksum - 1));
+
+		LCD_INFO("TX_GCT_TEST_PATTERN_2\n");
+		mdss_samsung_write_ddi_ram(ctrl, MIPI_TX_TYPE_GRAM,
+				vdd->gct.pat2.buf, vdd->gct.pat2.size);
+
+		msleep(300);
+
+		mdss_samsung_panel_data_read(ctrl,
+				get_panel_rx_cmds(ctrl, RX_GCT_CHECKSUM),
+				checksum++, LEVEL_KEY_NONE);
+
+		LCD_INFO("checksum =%x\n", *(checksum - 1));
+		LCD_INFO("TX_GCT_EXIT\n");
+		mdss_samsung_send_cmd(ctrl, TX_GCT_EXIT);
+	}
+
+	vdd->gct.on = 1;
+
+	LCD_INFO("checksum = {%x %x %x %x}\n",
+			vdd->gct.checksum[0], vdd->gct.checksum[1],
+			vdd->gct.checksum[2], vdd->gct.checksum[3]);
+
+	/* exit exclusive mode*/
+	for (i = TX_GCT_ENTER; i <= TX_GCT_EXIT; i++)
+		mdss_samsung_set_exclusive_tx_packet(ctrl, i, 0);
+	mdss_samsung_set_exclusive_tx_packet(ctrl, TX_DDI_RAM_IMG_DATA, 0);
+	mdss_samsung_set_exclusive_tx_packet(ctrl, TX_REG_READ_POS, 0);
+	vdd->exclusive_tx.enable = 0;
+	mutex_unlock(&vdd->exclusive_tx.ex_tx_lock);
+	wake_up(&vdd->exclusive_tx.ex_tx_waitq);
+
+	mutex_unlock(&mdp5_data->list_lock);
+
+	/* enable esd interrupt */
+	LCD_INFO("enable esd interrupt\n");
+	if (vdd->esd_recovery.esd_irq_enable)
+		vdd->esd_recovery.esd_irq_enable(true, true, (void *)vdd);
+
+err_init_pat:
+	if (vdd->gct.pat1.buf)
+		vfree(vdd->gct.pat1.buf);
+	if (vdd->gct.pat2.buf)
+		vfree(vdd->gct.pat2.buf);
+	vdd->gct.pat1.size = 0;
+	vdd->gct.pat2.size = 0;
+
+	return ret;
 }
 
 static void  mdss_panel_init(struct samsung_display_driver_data *vdd)
@@ -1909,6 +2092,10 @@ static void  mdss_panel_init(struct samsung_display_driver_data *vdd)
 
 	/* ACL default ON */
 	vdd->acl_status = 1;
+
+	/* Gram Checksum Test */
+	vdd->panel_func.samsung_gct_write = mdss_gct_write;
+	vdd->panel_func.samsung_gct_read = mdss_gct_read;
 }
 
 static int __init samsung_panel_init(void)

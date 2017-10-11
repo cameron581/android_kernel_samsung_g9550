@@ -185,13 +185,17 @@ typedef union
 	}BYTES;
     struct {
         uint32_t    PD_State:8,
-                    RSP_BYTE1:8,
+                    CC1_PLUG_STATE:3,
+                    RSP_BYTE1:1,
+                    CC2_PLUG_STATE:3,
+                    RSP_BYTE2:1,
                     PD_Next_State:8,
                     ATTACH_DONE:1,
                     IS_SOURCE:1,
                     IS_DFP:1,
                     RP_CurrentLvl:2,
-                    RSP_BYTE2:2,
+                    VBUS_CC_Short:1,
+                    VBUS_SBU_Short:1,
                     RESET:1;
 	}BITS;
 } FUNC_STATE_Type;
@@ -209,13 +213,16 @@ typedef union
                     RUN_DRY:1,
                     removing_charge_by_sbu_low:1,
                     BOOTING_RUN_DRY:1,
-                    RSP_BYTE:24;
+                    Sleep_Cable_Detect:1, //b8
+                    PDSTATE29_SBU_DONE:1, //b9
+                    RSP_BYTE:22;		 //b10 ~ b31	
 	} BITS;
 } LP_STATE_Type;
 
 typedef union
 {
 	uint32_t        DATA;
+	uint8_t	BYTE[4];
     struct {
         uint32_t    Flash_State:8,
                     Reserved:24;
@@ -376,12 +383,14 @@ typedef union
                     UPSM_By_I2C:1,                  // b2
                     Reserved:1,                     // b3
                     Is_HardReset:1,                 // b4
-                    AP_Req_Reserved_L:3,            // b5 - b7
+                    FAC_Abnormal_Repeat_State:1,    // b5
+                    FAC_Abnormal_Repeat_RID:1,      // b6
+                    FAC_Abnormal_RID0:1,            // b7
                     SBU1_CNT:8,                     // b8 - b15
                     SBU2_CNT:8,                     // b16 - b23
                     SBU_LOW_CNT:4,                  // b24 - b27
                     Alt_Mode_By_I2C:2,              // b28 - b29
-                    AP_Req_Reserved_H:1,            // b30
+                    DPM_START_ON:1,                 // b30
                     Func_Abnormal_State:1;          // b31
   } BITS;
 } AP_REQ_GET_STATUS_Type;
@@ -786,6 +795,15 @@ typedef enum
 	HOST_ON_BY_RID000K = 2, // RID000K detection
 } CCIC_HOST_REASON;
 
+typedef enum
+{
+	Rp_Sbu_check = 0,
+	Rp_56K = 1,	/* 80uA */
+	Rp_22K = 2,	/* 180uA */
+	Rp_10K = 3,	/* 330uA */
+	Rp_Abnormal = 4,
+} CCIC_RP_CurrentLvl;
+
 #define S2MM005_REG_MASK(reg, mask)	((reg & mask##_MASK) >> mask##_SHIFT)
 
 #if defined(CONFIG_CCIC_NOTIFIER)
@@ -823,6 +841,9 @@ struct s2mm005_data {
 	int water_det;
 	int run_dry;
 	int booting_run_dry;
+#if defined(CONFIG_SEC_FACTORY)
+	int fac_booting_dry_check;
+#endif
 
 	u8 firm_ver[4];
 
@@ -866,11 +887,13 @@ struct s2mm005_data {
 	struct delayed_work role_swap_work;
 #endif
 
-	u8 fw_product_num;
+	int s2mm005_fw_product_id;
+	u8 fw_product_id;
 
 #if defined(CONFIG_SEC_FACTORY)
 	int fac_water_enable;
 #endif
-
+	struct delayed_work usb_external_notifier_register_work;
+	struct notifier_block usb_external_notifier_nb;
 };
 #endif /* __S2MM005_H */

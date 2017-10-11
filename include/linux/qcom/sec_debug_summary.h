@@ -31,9 +31,9 @@ extern void sec_debug_summary_fill_fbinfo(int idx, void *fb, u32 xres,
 #define SEC_DEBUG_SUMMARY_MAGIC2 0x14F014F0
  /* high word : major version
   * low word : minor version
-  * minor version changes should not affect LK behavior
+  * minor version changes should not affect the Boot Loader behavior
   */
-#define SEC_DEBUG_SUMMARY_MAGIC3 0x00050000
+#define SEC_DEBUG_SUMMARY_MAGIC3 0x00060000
 
 struct core_reg_info {
 	char name[12];
@@ -197,19 +197,25 @@ struct member_type {
 
 typedef struct member_type member_type_int;
 typedef struct member_type member_type_long;
+typedef struct member_type member_type_longlong;
 typedef struct member_type member_type_ptr;
 typedef struct member_type member_type_str;
 
 struct struct_thread_info {
 	uint32_t struct_size;
+	member_type_long flags;
 	member_type_ptr task;
+	member_type_int cpu;
 	member_type_long rrk;
 };
 
 struct struct_task_struct {
 	uint32_t struct_size;
 	member_type_long state;
+	member_type_long exit_state;
 	member_type_ptr stack;
+	member_type_int flags;
+	member_type_int on_cpu;
 	member_type_int pid;
 	member_type_str comm;
 	member_type_ptr tasks_next;	
@@ -217,6 +223,10 @@ struct struct_task_struct {
 	member_type_long fp;
 	member_type_long sp;
 	member_type_long pc;
+	member_type_long sched_info__pcount;
+	member_type_longlong sched_info__run_delay;
+	member_type_longlong sched_info__last_arrival;
+	member_type_longlong sched_info__last_queued;
 };
 
 struct ropp_info {
@@ -236,7 +246,7 @@ struct sec_debug_summary_task {
 	uint64_t start_sp; /* TRHEAD_START_SP */
 	struct struct_thread_info ti;
 	struct struct_task_struct ts;
-	uint64_t init_task_pa;
+	uint64_t init_task;
 	struct irq_stack_info irq_stack;
 	struct ropp_info ropp;
 };
@@ -270,8 +280,11 @@ struct sec_debug_summary_iolog {
 struct sec_debug_summary_kconst {
 	uint64_t nr_cpus;
 	struct basic_type_int per_cpu_offset;
-	uint64_t virt_to_phys; // virt_to_phys(0);
-	uint64_t phys_to_virt; // phys_to_virt(0);
+	uint64_t phys_offset;
+	uint64_t page_offset;
+	uint64_t va_bits;
+	uint64_t kimage_vaddr;
+	uint64_t kimage_voffset;
 };
 
 
@@ -290,6 +303,15 @@ struct sec_debug_summary_msm_dump_info {
 struct sec_debug_summary_cpu_context {
 	uint64_t sec_debug_core_reg_paddr;
 	struct sec_debug_summary_msm_dump_info msm_dump_info;
+};
+
+struct struct_aplpm_state {
+	uint64_t p_cci;
+	uint32_t num_clusters;
+	uint64_t p_cluster;
+	uint32_t dstate_offset;
+	uint64_t p_runqueues;
+	uint32_t cstate_offset;
 };
 
 struct sec_debug_summary_data_apss {
@@ -314,6 +336,7 @@ struct sec_debug_summary_data_apss {
 	struct sec_debug_summary_iolog iolog;
 	struct sec_debug_summary_cpu_context cpu_reg;
 	struct sec_debug_summary_task task;
+	struct struct_aplpm_state aplpm;
 };
 
 struct sec_debug_summary_private {
@@ -435,5 +458,9 @@ void sec_debug_save_cpu_freq_voltage(int cpu, int flag, unsigned long value);
 extern void sec_debug_summary_set_kallsyms_info(struct sec_debug_summary_data_apss *apss);
 
 extern void sec_debug_summary_set_rtb_info(struct sec_debug_summary_data_apss *apss);
+
+extern void summary_set_lpm_info_cci(uint64_t phy_addr);
+extern void summary_set_lpm_info_cluster(struct sec_debug_summary_data_apss *apss);
+extern void summary_set_lpm_info_runqueues(struct sec_debug_summary_data_apss *apss);
 
 #endif /* SEC_DEBUG_SUMMARY_H */

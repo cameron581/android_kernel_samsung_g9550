@@ -201,6 +201,9 @@
 #define FTS_MODE_AOD					(1 << 2)
 #define FTS_MODE_PRESSURE					(1 << 6)
 
+#define FTS_BOOT_CRC_OKAY			0
+#define FTS_BOOT_CRC_FAIL			1
+
 #ifdef PAT_CONTROL
 /*---------------------------------------
 	<<< apply to server >>>
@@ -310,8 +313,7 @@ struct fts_finger {
 
 enum tsp_power_mode {
 	FTS_POWER_STATE_POWERDOWN = 0,
-	FTS_POWER_STATE_LOWPOWER_SUSPEND,
-	FTS_POWER_STATE_LOWPOWER_RESUME,
+	FTS_POWER_STATE_LOWPOWER,
 	FTS_POWER_STATE_ACTIVE,
 };
 
@@ -625,6 +627,9 @@ struct fts_ts_info {
 	int grip_landscape_edge;
 	u16 grip_landscape_deadzone;
 
+	unsigned int boot_crc_check_fail;
+	unsigned char nv_crc_fail_count;
+
 	short pressure_left;
 	short pressure_center;
 	short pressure_right;
@@ -637,7 +642,6 @@ struct fts_ts_info {
 	unsigned int wet_count;
 	unsigned int dive_count;
 	unsigned int comm_err_count;
-	unsigned int checksum_result;
 	unsigned int all_finger_count;
 	unsigned int all_force_count;
 	unsigned int all_aod_tap_count;
@@ -653,7 +657,7 @@ struct fts_ts_info {
 
 	int (*fts_write_reg)(struct fts_ts_info *info, unsigned char *reg, unsigned short num_com);
 	int (*fts_read_reg)(struct fts_ts_info *info, unsigned char *reg, int cnum, unsigned char *buf, int num);
-	void (*fts_systemreset)(struct fts_ts_info *info);
+	int (*fts_systemreset)(struct fts_ts_info *info, unsigned int delay);
 	int (*fts_wait_for_ready)(struct fts_ts_info *info);
 	void (*fts_command)(struct fts_ts_info *info, unsigned char cmd);
 	void (*fts_enable_feature)(struct fts_ts_info *info, unsigned char cmd, int enable);
@@ -687,8 +691,8 @@ int fts_read_analog_chip_id(struct fts_ts_info *info, unsigned char id);
 
 int set_nvm_data(struct fts_ts_info *info, unsigned char type, unsigned char *buf);
 int get_nvm_data(struct fts_ts_info *info, int type, unsigned char *nvdata);
-int fts_set_pressure_calibration_information(struct fts_ts_info *info, unsigned char base, unsigned char delta);
-int fts_get_pressure_calibration_information(struct fts_ts_info *info);
+int fts_set_factory_debug_information(struct fts_ts_info *info, unsigned char base, unsigned char delta, unsigned char checksum);
+int fts_get_factory_debug_information(struct fts_ts_info *info);
 
 int fts_panel_ito_test(struct fts_ts_info *info);
 
@@ -718,5 +722,7 @@ extern int haptic_homekey_release(void);
 
 extern void fts_set_grip_data_to_ic(struct fts_ts_info *info, u8 flag);
 extern void fts_set_grip_type(struct fts_ts_info *info, u8 set_type);
+void fts_reinit(struct fts_ts_info *info);
+int fts_set_warmboot_crc_enable(struct fts_ts_info *info);
 
 #endif /* _LINUX_FTS_TS_H_ */

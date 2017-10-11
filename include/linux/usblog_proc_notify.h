@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Samsung Electronics Co. Ltd.
+ * Copyright (C) 2016-2017 Samsung Electronics Co. Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -7,17 +7,18 @@
  * (at your option) any later version.
  */
 
-  /* usb notify layer v2.0 */
+  /* usb notify layer v3.0 */
 
 #ifndef __LINUX_USBLOG_PROC_NOTIFY_H__
 #define __LINUX_USBLOG_PROC_NOTIFY_H__
 
 enum usblog_type {
 	NOTIFY_FUNCSTATE,
-	NOTIFY_ALTERNATEMODE,		
+	NOTIFY_ALTERNATEMODE,
 	NOTIFY_CCIC_EVENT,
 	NOTIFY_MANAGER,
 	NOTIFY_USBMODE,
+	NOTIFY_USBMODE_EXTRA,
 	NOTIFY_USBSTATE,
 	NOTIFY_EVENT,
 };
@@ -27,7 +28,24 @@ enum usblog_state {
 	NOTIFY_CONNECTED,
 	NOTIFY_DISCONNECTED,
 	NOTIFY_RESET,
+	NOTIFY_RESET_FULL,
+	NOTIFY_RESET_HIGH,
+	NOTIFY_RESET_SUPER,
 	NOTIFY_ACCSTART,
+	NOTIFY_PULLUP,
+	NOTIFY_PULLUP_ENABLE,
+	NOTIFY_PULLUP_EN_SUCCESS,
+	NOTIFY_PULLUP_EN_FAIL,
+	NOTIFY_PULLUP_DISABLE,
+	NOTIFY_PULLUP_DIS_SUCCESS,
+	NOTIFY_PULLUP_DIS_FAIL,
+	NOTIFY_VBUS_SESSION,
+	NOTIFY_VBUS_SESSION_ENABLE,
+	NOTIFY_VBUS_EN_SUCCESS,
+	NOTIFY_VBUS_EN_FAIL,
+	NOTIFY_VBUS_SESSION_DISABLE,
+	NOTIFY_VBUS_DIS_SUCCESS,
+	NOTIFY_VBUS_DIS_FAIL,
 	NOTIFY_HIGH,
 	NOTIFY_SUPER,
 };
@@ -98,7 +116,7 @@ enum ccic_hpd {
 };
 
 enum ccic_pin_assignment {
-	NOTIFY_DP_PIN_UNKNOWN =0,
+	NOTIFY_DP_PIN_UNKNOWN = 0,
 	NOTIFY_DP_PIN_A,
 	NOTIFY_DP_PIN_B,
 	NOTIFY_DP_PIN_C,
@@ -120,12 +138,8 @@ extern void store_ccic_version(unsigned char *hw, unsigned char *sw_main,
 extern int register_usblog_proc(void);
 extern void unregister_usblog_proc(void);
 #else
-static inline void store_usblog_notify(int type, void *param1, void *parma2) {}
 static inline void store_ccic_version(unsigned char *hw, unsigned char *sw_main,
 			unsigned char *sw_boot) {}
-#ifdef CONFIG_CCIC_TEMP_BLOCK
-static inline void store_ccic_version(unsigned char *hw, unsigned char *sw) {}
-#endif
 static inline int register_usblog_proc(void)
 			{return 0; }
 static inline void unregister_usblog_proc(void) {}

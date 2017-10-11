@@ -58,20 +58,20 @@ static char level_1_key_off[] = {
 
 static char adjust_ldu_data_1[] = {
 	0xff, 0xff, 0xff,
-	0xf6, 0xfa, 0xff,
-	0xf4, 0xf8, 0xff,
-	0xe9, 0xf2, 0xff,
-	0xe2, 0xef, 0xff,
-	0xd4, 0xe8, 0xff,
+	0xfb, 0xfe, 0xff,
+	0xfa, 0xfd, 0xff,
+	0xfa, 0xfb, 0xff,
+	0xf7, 0xfb, 0xff,
+	0xf7, 0xfc, 0xff,
 };
 
 static char adjust_ldu_data_2[] = {
 	0xff, 0xfa, 0xf1,
-	0xff, 0xfd, 0xf8,
-	0xff, 0xfd, 0xfa,
-	0xfa, 0xfd, 0xff,
-	0xf5, 0xfb, 0xff,
-	0xe5, 0xf3, 0xff,
+	0xff, 0xfc, 0xf2,
+	0xff, 0xfc, 0xf3,
+	0xff, 0xfb, 0xf3,
+	0xff, 0xfe, 0xf6,
+	0xff, 0xff, 0xf6,
 };
 
 static char *adjust_ldu_data[MAX_MODE] = {
@@ -4389,6 +4389,670 @@ static unsigned char DSI0_HDR_VIDEO_3_MDNIE_2[] = {
 };
 
 static unsigned char DSI0_HDR_VIDEO_3_MDNIE_3[] = {
+	0xDD,
+	0x01, //mdnie_en
+	0x00, //mask 00 0000
+	0x03, //edge 00
+	0xf3, //ascr algo aolce gamut 00 00 00 00
+	0xff, //partial_en1
+	0xff, //partial_en2
+	0x00, //roi_en
+	0x00, //roi_block
+	0x00, //roi_sx
+	0x00, //roi_sx
+	0x00, //roi_sy
+	0x00, //roi_sy
+	0x00, //roi_ex
+	0x00, //roi_ex
+	0x00, //roi_ey
+	0x00, //roi_ey
+	0xff, //trans_on trans_block 0 000 0000
+	0x04, //trans_slope
+	0x01, //trans_interval
+	//end
+};
+
+static unsigned char DSI0_HDR_VIDEO_4_MDNIE_1[] = {
+	//start
+	0xDF,
+	0x01, //linear_on ascr_skin_on 0000 0000
+	0x67, //ascr_skin_cb
+	0xa9, //ascr_skin_cr
+	0x37, //ascr_dist_up
+	0x29, //ascr_dist_down
+	0x19, //ascr_dist_right
+	0x47, //ascr_dist_left
+	0x00, //ascr_div_up 20
+	0x25,
+	0x3d,
+	0x00, //ascr_div_down
+	0x31,
+	0xf4,
+	0x00, //ascr_div_right
+	0x51,
+	0xec,
+	0x00, //ascr_div_left
+	0x1c,
+	0xd8,
+	0xd0, //ascr_skin_Rr
+	0x48, //ascr_skin_Rg
+	0x50, //ascr_skin_Rb
+	0xff, //ascr_skin_Yr
+	0xd0, //ascr_skin_Yg
+	0x00, //ascr_skin_Yb
+	0xff, //ascr_skin_Mr
+	0x00, //ascr_skin_Mg
+	0xff, //ascr_skin_Mb
+	0xff, //ascr_skin_Wr
+	0xff, //ascr_skin_Wg
+	0xff, //ascr_skin_Wb
+	0x00, //ascr_Cr
+	0xff, //ascr_Rr
+	0xff, //ascr_Cg
+	0x00, //ascr_Rg
+	0xff, //ascr_Cb
+	0x00, //ascr_Rb
+	0xff, //ascr_Mr
+	0x00, //ascr_Gr
+	0x00, //ascr_Mg
+	0xff, //ascr_Gg
+	0xff, //ascr_Mb
+	0x00, //ascr_Gb
+	0xa0, //ascr_Yr
+	0x00, //ascr_Br
+	0xff, //ascr_Yg
+	0x00, //ascr_Bg
+	0x00, //ascr_Yb
+	0xff, //ascr_Bb
+	0xff, //ascr_Wr
+	0x00, //ascr_Kr
+	0xf7, //ascr_Wg
+	0x00, //ascr_Kg
+	0xf0, //ascr_Wb
+	0x00, //ascr_Kb
+	0x0F, //edge_ctrl
+	0x00, //edge_radius 12
+	0x6F,
+	0x05, //edge_aa_factor
+	0x00, //edge_r
+	0x00, //edge_g
+	0x00, //edge_b
+	0x00, //edge_x 11
+	0x70,
+	0x00, //edge_y 12
+	0x70,
+	0x44, //edge_coef_a edge_coef_b 0000 0000
+};
+
+static unsigned char DSI0_HDR_VIDEO_4_MDNIE_2[] = {
+	0xDE,
+	0x10, //gamut_gamma_on gamut_blk_shift 0000 0000
+	0x40, //gamut_scale
+	0x05, //gamut_r1
+	0xf1,
+	0xfe, //gamut_r2
+	0xc3,
+	0xff, //gamut_r3
+	0x4c,
+	0xff, //gamut_g1
+	0xc3,
+	0x03, //gamut_g2
+	0xf1,
+	0x00, //gamut_g3
+	0x4c,
+	0x00, //gamut_b1
+	0x03,
+	0xff, //gamut_b2
+	0xec,
+	0x04, //gamut_b3
+	0x11,
+	0x00, //slce_on cadrx_en 0000 0000
+	0x11, //glare_on
+	0x00, //lce_gain 000 0000
+	0x24, //lce_color_gain 00 0000
+	0x96, //lce_min_ref_offset
+	0xb3, //lce_illum_gain
+	0x01, //lce_ref_offset 9
+	0x0e,
+	0x01, //lce_ref_gain 9
+	0x00,
+	0x77, //lce_block_size h v 0000 0000
+	0x03, //lce_dark_th 000
+	0x07, //lce_reduct_slope 0000
+	0x40, //lce_black cc0 cc1 color_th 0 0 0 0000
+	0x08, //lce_large_w
+	0x04, //lce_med_w
+	0x04, //lce_small_w
+	0x00, //cadrx_dit_en shadow_corr_en ref_ctrl_en 0 0 0
+	0x00, //cadrx_gain
+	0x0d, //cadrx_low_intensity_th
+	0xe1, //cadrx_high_intensity_th
+	0x07, //cadrx_ui_zerobincnt_th
+	0x29, //cadrx_ui_ratio_th
+	0x04,
+	0x0f, //cadrx_entire_freq
+	0xa0,
+	0x00,
+	0x03, //cadrx_peak_th_in_freq
+	0x7a,
+	0xa0,
+	0x00, //cadrx_high_peak_th_in_freq
+	0x25,
+	0x1c,
+	0x24, //cadrx_dit_color_gain
+	0x00, //cadrx_dit_illum_a0
+	0x48, //cadrx_dit_illum_a1
+	0xea, //cadrx_dit_illum_a2
+	0xfa, //cadrx_dit_illum_a3
+	0x00, //cadrx_dit_illum_b0
+	0x10,
+	0x00, //cadrx_dit_illum_b1
+	0x10,
+	0x00, //cadrx_dit_illum_b2
+	0x9c,
+	0x01, //cadrx_dit_illum_b3
+	0x00,
+	0x00, //cadrx_dit_illum_slope1
+	0x00,
+	0x00, //cadrx_dit_illum_slope2
+	0xdc,
+	0x03, //cadrx_dit_illum_slope3
+	0xff,
+	0x40, //cadrx_ui_illum_a1
+	0x80, //cadrx_ui_illum_a2
+	0xc0, //cadrx_ui_illum_a3
+	0x00, //cadrx_ui_illum_offset1
+	0x9a,
+	0x00, //cadrx_ui_illum_offset2
+	0x9a,
+	0x00, //cadrx_ui_illum_offset3
+	0x9a,
+	0x00, //cadrx_ui_illum_offset4
+	0x9a,
+	0x00, //cadrx_ui_illum_slope1
+	0x00,
+	0x00, //cadrx_ui_illum_slope2
+	0x00,
+	0x00, //cadrx_ui_illum_slope3
+	0x00,
+	0x00, //cadrx_ui_illum_slope4
+	0x00,
+	0x40, //cadrx_ui_ref_a1
+	0x80, //cadrx_ui_ref_a2
+	0xc0, //cadrx_ui_ref_a3
+	0x01, //cadrx_ui_ref_offset1
+	0x0e,
+	0x01, //cadrx_ui_ref_offset2
+	0x0e,
+	0x01, //cadrx_ui_ref_offset3
+	0x0e,
+	0x01, //cadrx_ui_ref_offset4
+	0x0e,
+	0x00, //cadrx_ui_ref_slope1
+	0x00,
+	0x00, //cadrx_ui_ref_slope2
+	0x00,
+	0x00, //cadrx_ui_ref_slope3
+	0x00,
+	0x00, //cadrx_ui_ref_slope4
+	0x00,
+	0x01, //cadrx_reg_ref_c1_offset
+	0x0e,
+	0x01, //cadrx_reg_ref_c2_offset
+	0x3a,
+	0x01, //cadrx_reg_ref_c3_offset
+	0x44,
+	0x00, //cadrx_reg_ref_c1_slope
+	0x01,
+	0x00, //cadrx_reg_ref_c2_slope
+	0x43,
+	0x00, //cadrx_reg_ref_c3_slope
+	0x4b,
+	0x00, //cadrx_sc_reg_a1
+	0x18,
+	0x00, //cadrx_sc_reg_b1
+	0x1c,
+	0x01, //cadrx_sc_k1_int
+	0xff,
+	0x01, //cadrx_sc_k2_int
+	0xff,
+	0x03, //cadrx_sc_w1_int
+	0xff,
+	0xe8,
+	0x03, //cadrx_sc_w2_int
+	0xff,
+	0xe8,
+	0x00, //flicker_w_en
+	0x14, //flicker_w
+	0x01, //flicker_trans_en
+	0x04, //flicker_trans_slope
+	0x00, //bl_en
+	0x03, //bl_hbs_th
+	0x10, //bl_lbs_th
+	0xC8, //bl_illum_gain
+	0x01, //bl_reg_gain 9
+	0x2C,
+	0x00, //bl_le_diff
+	0x00, //bl_cadrx_gain
+	0x04, //bl_trans_slope
+	0x00, //le_en
+	0x40, //le_diff
+	0x03, //le_lmax 10
+	0xB6,
+	0x23, //le_p
+	0x24, //le_w_tmf
+	0x00, //le_w_struct_diff 9
+	0x72,
+	0x01, //le_w_struct_diff_gain 
+	0x00, //le_w_luminance 9
+	0x0D,
+	0x00, //le_luminance_slope 10
+	0x04,
+	0x80, //glare_blk_avg_th 0000 0000
+	0x00, //glare_luma_gain 9
+	0x28,
+	0xa0, //glare_luma_ctl_start 0000 0000
+	0x01, //glare_luma_th 0000 0000
+	0x00, //glare_luma_step 9
+	0x01,
+	0x00, //glare_uni_luma_gain 9
+	0x01,
+	0xf0, //glare_blk_max_th 0000 0000
+	0x89, //glare_blk_max_w 0000 0000
+	0x18, //glare_blk_max_curve blk_max_sh 0 0000
+	0xf0, //glare_con_ext_max_th 0000 0000
+	0x89, //glare_con_ext_max_w 0000 0000
+	0x38, //glare_con_ext_max_sign con_ext_max_curve con_ext_max_sh 0 0 0000
+	0x00, //glare_max_cnt_th 0000
+	0x00, //glare_max_cnt_th 0000 0000
+	0x0c, //glare_max_cnt_w 0000 0000
+	0x38, //glare_max_cnt_sign max_cnt_curve max_cnt_sh 0 0 0000
+	0xba, //glare_y_avg_th 0000 0000
+	0x1e, //glare_y_avg_w 0000 0000
+	0x38, //glare_y_avg_sign y_avg_curve y_avg_sh 0 0 0000
+	0x00, //glare_max_cnt_th_dmc 0000
+	0x05, //glare_max_cnt_th_dmc 0000 0000
+	0x07, //nr fa de cs gamma 0 0000
+	0xff, //nr_mask_th
+	0x00, //de_gain 10
+	0x10,
+	0x00, //de_maxplus 11
+	0x40,
+	0x00, //de_maxminus 11
+	0x40,
+	0x14, //fa_edge_th
+	0x00, //fa_step_p 13
+	0x01,
+	0x00, //fa_step_n 13
+	0x01,
+	0x00, //fa_max_de_gain 13
+	0x10,
+	0x00, //fa_pcl_ppi 14
+	0x00,
+	0x28, //fa_os_cnt_10_co
+	0x3c, //fa_os_cnt_20_co
+	0x04, //fa_edge_cnt_weight
+	0x0f, //fa_avg_y_weight
+	0x01, //cs_gain 10
+	0x20,
+	0x00, //curve_0
+	0x0c, //curve_1
+	0x18, //curve_2
+	0x24, //curve_3
+	0x34, //curve_4
+	0x47, //curve_5
+	0x5c, //curve_6
+	0x72, //curve_7
+	0x8e, //curve_8
+	0xaa, //curve_9
+	0xc6, //curve_10
+	0xd7, //curve_11
+	0xe6, //curve_12
+	0xf0, //curve_13
+	0xfa, //curve_14
+	0xff, //curve_15
+	0x01, //curve_16
+	0x00,
+	0x00, //curve_offset 10
+	0x00,
+	0x05, //curve_low_x
+	0x00, //blank
+	0x00, //curve_low_y
+};
+
+static unsigned char DSI0_HDR_VIDEO_4_MDNIE_3[] = {
+	0xDD,
+	0x01, //mdnie_en
+	0x00, //mask 00 0000
+	0x03, //edge 00
+	0xf3, //ascr algo aolce gamut 00 00 00 00
+	0xff, //partial_en1
+	0xff, //partial_en2
+	0x00, //roi_en
+	0x00, //roi_block
+	0x00, //roi_sx
+	0x00, //roi_sx
+	0x00, //roi_sy
+	0x00, //roi_sy
+	0x00, //roi_ex
+	0x00, //roi_ex
+	0x00, //roi_ey
+	0x00, //roi_ey
+	0xff, //trans_on trans_block 0 000 0000
+	0x04, //trans_slope
+	0x01, //trans_interval
+	//end
+};
+
+static unsigned char DSI0_HDR_VIDEO_5_MDNIE_1[] = {
+	//start
+	0xDF,
+	0x01, //linear_on ascr_skin_on 0000 0000
+	0x67, //ascr_skin_cb
+	0xa9, //ascr_skin_cr
+	0x37, //ascr_dist_up
+	0x29, //ascr_dist_down
+	0x19, //ascr_dist_right
+	0x47, //ascr_dist_left
+	0x00, //ascr_div_up 20
+	0x25,
+	0x3d,
+	0x00, //ascr_div_down
+	0x31,
+	0xf4,
+	0x00, //ascr_div_right
+	0x51,
+	0xec,
+	0x00, //ascr_div_left
+	0x1c,
+	0xd8,
+	0xd0, //ascr_skin_Rr
+	0x48, //ascr_skin_Rg
+	0x50, //ascr_skin_Rb
+	0xff, //ascr_skin_Yr
+	0xd0, //ascr_skin_Yg
+	0x00, //ascr_skin_Yb
+	0xff, //ascr_skin_Mr
+	0x00, //ascr_skin_Mg
+	0xff, //ascr_skin_Mb
+	0xff, //ascr_skin_Wr
+	0xff, //ascr_skin_Wg
+	0xff, //ascr_skin_Wb
+	0x00, //ascr_Cr
+	0xff, //ascr_Rr
+	0xff, //ascr_Cg
+	0x00, //ascr_Rg
+	0xff, //ascr_Cb
+	0x00, //ascr_Rb
+	0xff, //ascr_Mr
+	0x00, //ascr_Gr
+	0x00, //ascr_Mg
+	0xff, //ascr_Gg
+	0xff, //ascr_Mb
+	0x00, //ascr_Gb
+	0xa0, //ascr_Yr
+	0x00, //ascr_Br
+	0xff, //ascr_Yg
+	0x00, //ascr_Bg
+	0x00, //ascr_Yb
+	0xff, //ascr_Bb
+	0xff, //ascr_Wr
+	0x00, //ascr_Kr
+	0xf7, //ascr_Wg
+	0x00, //ascr_Kg
+	0xf0, //ascr_Wb
+	0x00, //ascr_Kb
+	0x0F, //edge_ctrl
+	0x00, //edge_radius 12
+	0x6F,
+	0x05, //edge_aa_factor
+	0x00, //edge_r
+	0x00, //edge_g
+	0x00, //edge_b
+	0x00, //edge_x 11
+	0x70,
+	0x00, //edge_y 12
+	0x70,
+	0x44, //edge_coef_a edge_coef_b 0000 0000
+};
+
+static unsigned char DSI0_HDR_VIDEO_5_MDNIE_2[] = {
+	0xDE,
+	0x10, //gamut_gamma_on gamut_blk_shift 0000 0000
+	0x40, //gamut_scale
+	0x05, //gamut_r1
+	0xf1,
+	0xfe, //gamut_r2
+	0xc3,
+	0xff, //gamut_r3
+	0x4c,
+	0xff, //gamut_g1
+	0xc3,
+	0x03, //gamut_g2
+	0xf1,
+	0x00, //gamut_g3
+	0x4c,
+	0x00, //gamut_b1
+	0x03,
+	0xff, //gamut_b2
+	0xec,
+	0x04, //gamut_b3
+	0x11,
+	0x00, //slce_on cadrx_en 0000 0000
+	0x11, //glare_on
+	0x00, //lce_gain 000 0000
+	0x24, //lce_color_gain 00 0000
+	0x96, //lce_min_ref_offset
+	0xb3, //lce_illum_gain
+	0x01, //lce_ref_offset 9
+	0x0e,
+	0x01, //lce_ref_gain 9
+	0x00,
+	0x77, //lce_block_size h v 0000 0000
+	0x03, //lce_dark_th 000
+	0x07, //lce_reduct_slope 0000
+	0x40, //lce_black cc0 cc1 color_th 0 0 0 0000
+	0x08, //lce_large_w
+	0x04, //lce_med_w
+	0x04, //lce_small_w
+	0x00, //cadrx_dit_en shadow_corr_en ref_ctrl_en 0 0 0
+	0x00, //cadrx_gain
+	0x0d, //cadrx_low_intensity_th
+	0xe1, //cadrx_high_intensity_th
+	0x07, //cadrx_ui_zerobincnt_th
+	0x29, //cadrx_ui_ratio_th
+	0x04,
+	0x0f, //cadrx_entire_freq
+	0xa0,
+	0x00,
+	0x03, //cadrx_peak_th_in_freq
+	0x7a,
+	0xa0,
+	0x00, //cadrx_high_peak_th_in_freq
+	0x25,
+	0x1c,
+	0x24, //cadrx_dit_color_gain
+	0x00, //cadrx_dit_illum_a0
+	0x48, //cadrx_dit_illum_a1
+	0xea, //cadrx_dit_illum_a2
+	0xfa, //cadrx_dit_illum_a3
+	0x00, //cadrx_dit_illum_b0
+	0x10,
+	0x00, //cadrx_dit_illum_b1
+	0x10,
+	0x00, //cadrx_dit_illum_b2
+	0x9c,
+	0x01, //cadrx_dit_illum_b3
+	0x00,
+	0x00, //cadrx_dit_illum_slope1
+	0x00,
+	0x00, //cadrx_dit_illum_slope2
+	0xdc,
+	0x03, //cadrx_dit_illum_slope3
+	0xff,
+	0x40, //cadrx_ui_illum_a1
+	0x80, //cadrx_ui_illum_a2
+	0xc0, //cadrx_ui_illum_a3
+	0x00, //cadrx_ui_illum_offset1
+	0x9a,
+	0x00, //cadrx_ui_illum_offset2
+	0x9a,
+	0x00, //cadrx_ui_illum_offset3
+	0x9a,
+	0x00, //cadrx_ui_illum_offset4
+	0x9a,
+	0x00, //cadrx_ui_illum_slope1
+	0x00,
+	0x00, //cadrx_ui_illum_slope2
+	0x00,
+	0x00, //cadrx_ui_illum_slope3
+	0x00,
+	0x00, //cadrx_ui_illum_slope4
+	0x00,
+	0x40, //cadrx_ui_ref_a1
+	0x80, //cadrx_ui_ref_a2
+	0xc0, //cadrx_ui_ref_a3
+	0x01, //cadrx_ui_ref_offset1
+	0x0e,
+	0x01, //cadrx_ui_ref_offset2
+	0x0e,
+	0x01, //cadrx_ui_ref_offset3
+	0x0e,
+	0x01, //cadrx_ui_ref_offset4
+	0x0e,
+	0x00, //cadrx_ui_ref_slope1
+	0x00,
+	0x00, //cadrx_ui_ref_slope2
+	0x00,
+	0x00, //cadrx_ui_ref_slope3
+	0x00,
+	0x00, //cadrx_ui_ref_slope4
+	0x00,
+	0x01, //cadrx_reg_ref_c1_offset
+	0x0e,
+	0x01, //cadrx_reg_ref_c2_offset
+	0x3a,
+	0x01, //cadrx_reg_ref_c3_offset
+	0x44,
+	0x00, //cadrx_reg_ref_c1_slope
+	0x01,
+	0x00, //cadrx_reg_ref_c2_slope
+	0x43,
+	0x00, //cadrx_reg_ref_c3_slope
+	0x4b,
+	0x00, //cadrx_sc_reg_a1
+	0x18,
+	0x00, //cadrx_sc_reg_b1
+	0x1c,
+	0x01, //cadrx_sc_k1_int
+	0xff,
+	0x01, //cadrx_sc_k2_int
+	0xff,
+	0x03, //cadrx_sc_w1_int
+	0xff,
+	0xe8,
+	0x03, //cadrx_sc_w2_int
+	0xff,
+	0xe8,
+	0x00, //flicker_w_en
+	0x14, //flicker_w
+	0x01, //flicker_trans_en
+	0x04, //flicker_trans_slope
+	0x00, //bl_en
+	0x03, //bl_hbs_th
+	0x10, //bl_lbs_th
+	0xC8, //bl_illum_gain
+	0x01, //bl_reg_gain 9
+	0x2C,
+	0x00, //bl_le_diff
+	0x00, //bl_cadrx_gain
+	0x04, //bl_trans_slope
+	0x00, //le_en
+	0x40, //le_diff
+	0x03, //le_lmax 10
+	0xB6,
+	0x23, //le_p
+	0x24, //le_w_tmf
+	0x00, //le_w_struct_diff 9
+	0x72,
+	0x01, //le_w_struct_diff_gain 
+	0x00, //le_w_luminance 9
+	0x0D,
+	0x00, //le_luminance_slope 10
+	0x04,
+	0x80, //glare_blk_avg_th 0000 0000
+	0x00, //glare_luma_gain 9
+	0x28,
+	0xa0, //glare_luma_ctl_start 0000 0000
+	0x01, //glare_luma_th 0000 0000
+	0x00, //glare_luma_step 9
+	0x01,
+	0x00, //glare_uni_luma_gain 9
+	0x01,
+	0xf0, //glare_blk_max_th 0000 0000
+	0x89, //glare_blk_max_w 0000 0000
+	0x18, //glare_blk_max_curve blk_max_sh 0 0000
+	0xf0, //glare_con_ext_max_th 0000 0000
+	0x89, //glare_con_ext_max_w 0000 0000
+	0x38, //glare_con_ext_max_sign con_ext_max_curve con_ext_max_sh 0 0 0000
+	0x00, //glare_max_cnt_th 0000
+	0x00, //glare_max_cnt_th 0000 0000
+	0x0c, //glare_max_cnt_w 0000 0000
+	0x38, //glare_max_cnt_sign max_cnt_curve max_cnt_sh 0 0 0000
+	0xba, //glare_y_avg_th 0000 0000
+	0x1e, //glare_y_avg_w 0000 0000
+	0x38, //glare_y_avg_sign y_avg_curve y_avg_sh 0 0 0000
+	0x00, //glare_max_cnt_th_dmc 0000
+	0x05, //glare_max_cnt_th_dmc 0000 0000
+	0x07, //nr fa de cs gamma 0 0000
+	0xff, //nr_mask_th
+	0x00, //de_gain 10
+	0x10,
+	0x00, //de_maxplus 11
+	0x40,
+	0x00, //de_maxminus 11
+	0x40,
+	0x14, //fa_edge_th
+	0x00, //fa_step_p 13
+	0x01,
+	0x00, //fa_step_n 13
+	0x01,
+	0x00, //fa_max_de_gain 13
+	0x10,
+	0x00, //fa_pcl_ppi 14
+	0x00,
+	0x28, //fa_os_cnt_10_co
+	0x3c, //fa_os_cnt_20_co
+	0x04, //fa_edge_cnt_weight
+	0x0f, //fa_avg_y_weight
+	0x01, //cs_gain 10
+	0x20,
+	0x00, //curve_0
+	0x0c, //curve_1
+	0x18, //curve_2
+	0x24, //curve_3
+	0x34, //curve_4
+	0x47, //curve_5
+	0x5c, //curve_6
+	0x72, //curve_7
+	0x8e, //curve_8
+	0xaa, //curve_9
+	0xc6, //curve_10
+	0xd7, //curve_11
+	0xe6, //curve_12
+	0xf0, //curve_13
+	0xfa, //curve_14
+	0xff, //curve_15
+	0x01, //curve_16
+	0x00,
+	0x00, //curve_offset 10
+	0x00,
+	0x05, //curve_low_x
+	0x00, //blank
+	0x00, //curve_low_y
+};
+
+static unsigned char DSI0_HDR_VIDEO_5_MDNIE_3[] = {
 	0xDD,
 	0x01, //mdnie_en
 	0x00, //mask 00 0000
@@ -16468,6 +17132,22 @@ static struct dsi_cmd_desc DSI0_HDR_VIDEO_3_MDNIE[] = {
 	{{DTYPE_DCS_LWRITE, 1, 0, 0, 0, sizeof(level_1_key_off)}, level_1_key_off},
 };
 
+static struct dsi_cmd_desc DSI0_HDR_VIDEO_4_MDNIE[] = {
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(level_1_key_on)}, level_1_key_on},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_HDR_VIDEO_4_MDNIE_1)}, DSI0_HDR_VIDEO_4_MDNIE_1},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_HDR_VIDEO_4_MDNIE_2)}, DSI0_HDR_VIDEO_4_MDNIE_2},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_HDR_VIDEO_4_MDNIE_3)}, DSI0_HDR_VIDEO_4_MDNIE_3},
+	{{DTYPE_DCS_LWRITE, 1, 0, 0, 0, sizeof(level_1_key_off)}, level_1_key_off},
+};
+
+static struct dsi_cmd_desc DSI0_HDR_VIDEO_5_MDNIE[] = {
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(level_1_key_on)}, level_1_key_on},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_HDR_VIDEO_5_MDNIE_1)}, DSI0_HDR_VIDEO_5_MDNIE_1},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_HDR_VIDEO_5_MDNIE_2)}, DSI0_HDR_VIDEO_5_MDNIE_2},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_HDR_VIDEO_5_MDNIE_3)}, DSI0_HDR_VIDEO_5_MDNIE_3},
+	{{DTYPE_DCS_LWRITE, 1, 0, 0, 0, sizeof(level_1_key_off)}, level_1_key_off},
+};
+
 static struct dsi_cmd_desc DSI0_VIDEO_ENHANCER_MDNIE[] = {
 	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(level_1_key_on)}, level_1_key_on},
 	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(DSI0_VIDEO_ENHANCER_MDNIE_1)}, DSI0_VIDEO_ENHANCER_MDNIE_1},
@@ -16972,6 +17652,8 @@ static struct dsi_cmd_desc *hdr_tune_value_dsi0[HDR_MAX] = {
 	DSI0_HDR_VIDEO_1_MDNIE,
 	DSI0_HDR_VIDEO_2_MDNIE,
 	DSI0_HDR_VIDEO_3_MDNIE,
+	DSI0_HDR_VIDEO_4_MDNIE,
+	DSI0_HDR_VIDEO_5_MDNIE,
 };
 
 #define DSI0_RGB_SENSOR_MDNIE_1_SIZE ARRAY_SIZE(DSI0_RGB_SENSOR_MDNIE_1)

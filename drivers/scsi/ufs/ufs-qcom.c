@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016, Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -103,13 +103,10 @@ static int ufs_qcom_host_clk_get(struct device *dev,
 	int err = 0;
 
 	clk = devm_clk_get(dev, name);
-	if (IS_ERR(clk)) {
+	if (IS_ERR(clk))
 		err = PTR_ERR(clk);
-		dev_err(dev, "%s: failed to get %s err %d",
-				__func__, name, err);
-	} else {
+	else
 		*clk_out = clk;
-	}
 
 	return err;
 }
@@ -188,20 +185,29 @@ static int ufs_qcom_init_lane_clks(struct ufs_qcom_host *host)
 
 	err = ufs_qcom_host_clk_get(dev,
 			"rx_lane0_sync_clk", &host->rx_l0_sync_clk);
-	if (err)
+	if (err) {
+		dev_err(dev, "%s: failed to get rx_lane0_sync_clk, err %d",
+				__func__, err);
 		goto out;
+	}
 
 	err = ufs_qcom_host_clk_get(dev,
 			"tx_lane0_sync_clk", &host->tx_l0_sync_clk);
-	if (err)
+	if (err) {
+		dev_err(dev, "%s: failed to get tx_lane0_sync_clk, err %d",
+				__func__, err);
 		goto out;
+	}
 
 	/* In case of single lane per direction, don't read lane1 clocks */
 	if (host->hba->lanes_per_direction > 1) {
 		err = ufs_qcom_host_clk_get(dev, "rx_lane1_sync_clk",
 			&host->rx_l1_sync_clk);
-		if (err)
+		if (err) {
+			dev_err(dev, "%s: failed to get rx_lane1_sync_clk, err %d",
+					__func__, err);
 			goto out;
+		}
 
 		/* The tx lane1 clk could be muxed, hence keep this optional */
 		ufs_qcom_host_clk_get(dev, "tx_lane1_sync_clk",
@@ -2682,16 +2688,12 @@ static void ufs_qcom_testbus_read(struct ufs_hba *hba)
 {
 	ufs_qcom_dump_regs(hba, UFS_TEST_BUS, 1, "UFS_TEST_BUS ");
 }
-#if 0	// Temporary : It's not used 
+
 static void ufs_qcom_print_unipro_testbus(struct ufs_hba *hba)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
-	u32 *testbus = NULL;
 	int i, nminor = 256, testbus_len = nminor * sizeof(u32);
-
-	testbus = kmalloc(testbus_len, GFP_KERNEL);
-	if (!testbus)
-		return;
+	u32 testbus[testbus_len];
 
 	host->testbus.select_major = TSTBUS_UNIPRO;
 	for (i = 0; i < nminor; i++) {
@@ -2701,9 +2703,8 @@ static void ufs_qcom_print_unipro_testbus(struct ufs_hba *hba)
 	}
 	print_hex_dump(KERN_ERR, "UNIPRO_TEST_BUS ", DUMP_PREFIX_OFFSET,
 			16, 4, testbus, testbus_len, false);
-	kfree(testbus);
 }
-#endif
+
 static void ufs_qcom_dump_dbg_regs(struct ufs_hba *hba, bool no_sleep)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
@@ -2717,18 +2718,19 @@ static void ufs_qcom_dump_dbg_regs(struct ufs_hba *hba, bool no_sleep)
 		return;
 
 	/* sleep a bit intermittently as we are dumping too much data */
-	usleep_range(1000, 1100);
 	ufs_qcom_testbus_read(hba);
-	usleep_range(1000, 1100);
+	ufs_qcom_print_unipro_testbus(hba);
 	ufs_qcom_phy_dbg_register_dump(phy);
-	usleep_range(1000, 1100);
 	ufs_qcom_ice_print_regs(host);
+	printk(KERN_ALERT "%s End", __func__ );
 }
 
 static void ufs_qcom_set_irq_mask(struct ufs_hba *hba, bool on)
 {
-	bool boost;
-	struct cpumask mask, irq_mask;
+	bool boost = false;
+	static bool boosted = false;
+	int target_core = 0;
+	struct cpumask mask;
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
 	struct ufs_pa_layer_attr *attr = &host->dev_req_params;
 	int gear;
@@ -2737,21 +2739,29 @@ static void ufs_qcom_set_irq_mask(struct ufs_hba *hba, bool on)
 		return;
 
 	gear =  max_t(u32, attr->gear_rx, attr->gear_tx);
-
 	if (on && gear == UFS_HS_G3) {
-		boost = 1;
-		cpumask_copy(&mask, cpu_coregroup_mask(4));
-	} else {
-		boost = 0;
-		cpumask_copy(&mask, cpu_coregroup_mask(0));
+		boost = true;
+		target_core = 4;
 	}
 
-	cpumask_copy(&irq_mask, irq_get_affinity_mask(hba->irq));
+	cpu_maps_update_begin();
 
-	if (!cpumask_equal(&irq_mask, &mask)) {
+	cpumask_and(&mask, cpu_coregroup_mask(target_core), cpu_online_mask);
+	if (!cpumask_equal(&mask, cpu_coregroup_mask(target_core))) {
+		/* Some target cores are offline now. Stop setting affinity */
+		boost = false;
+		cpumask_copy(&mask, cpu_online_mask);
+	}
+
+	if (boosted ^ boost) {
 		core_ctl_set_boost(boost);
-		irq_set_affinity(hba->irq, &mask);
+		boosted = boost;
 	}
+
+	if (!cpumask_equal(&mask, irq_get_affinity_mask(hba->irq)))
+		irq_set_affinity(hba->irq, &mask);
+
+	cpu_maps_update_done();
 }
 
 /**

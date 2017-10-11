@@ -144,15 +144,17 @@ static void msm_ssusb_qmp_enable_autonomous(struct msm_ssphy_qmp *phy,
 
 	if (enable) {
 		msm_ssusb_qmp_clr_lfps_rxterm_int(phy);
+		val = readb_relaxed(phy->base + autonomous_mode_offset);
+		val |= ARCVR_DTCT_EN;
 		if (phy->phy.flags & DEVICE_IN_SS_MODE) {
-			val =
-			readb_relaxed(phy->base + autonomous_mode_offset);
-			val |= ARCVR_DTCT_EN;
 			val |= ALFPS_DTCT_EN;
 			val &= ~ARCVR_DTCT_EVENT_SEL;
-			writeb_relaxed(val, phy->base + autonomous_mode_offset);
+		} else {
+			val &= ~ALFPS_DTCT_EN;
+			val |= ARCVR_DTCT_EVENT_SEL;
 		}
 
+		writeb_relaxed(val, phy->base + autonomous_mode_offset);
 		/* clamp phy level shifter to perform autonomous detection */
 		writel_relaxed(0x1, phy->vls_clamp_reg);
 	} else {
@@ -307,10 +309,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		phy->clk_enabled = true;
 	}
 
-	/* select usb3 phy mode */
-	if (phy->tcsr_usb3_dp_phymode)
-		writel_relaxed(0x0, phy->tcsr_usb3_dp_phymode);
-
 	writel_relaxed(0x01,
 		phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
 
@@ -385,6 +383,10 @@ static int msm_ssphy_qmp_reset(struct usb_phy *uphy)
 		dev_err(uphy->dev, "phy_reset assert failed\n");
 		goto deassert_phy_phy_reset;
 	}
+	
+	/* select usb3 phy mode */
+	if (phy->tcsr_usb3_dp_phymode)
+		writel_relaxed(0x0, phy->tcsr_usb3_dp_phymode);
 
 	/* Deassert USB3 PHY CSR reset */
 	ret = reset_control_deassert(phy->phy_reset);

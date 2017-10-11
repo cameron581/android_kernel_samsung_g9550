@@ -704,7 +704,7 @@ static void ffs_epfile_io_complete(struct usb_ep *_ep, struct usb_request *req)
 		ep->status = req->status ? req->status : req->actual;
 		/* Set is_busy false to indicate completion of last request */
 		ep->is_busy = false;
-		ffs_log("ep status %d for req %p", ep->status, req);
+		ffs_log("ep status %d for req %pK", ep->status, req);
 		complete(req->context);
 	}
 }
@@ -1586,6 +1586,9 @@ static int functionfs_init(void)
 		pr_err("failed registering file system (%d)\n", ret);
 #ifdef CONFIG_USB_FFS_IPC_LOGGING
 	ffs_ipc_log = ipc_log_context_create(NUM_PAGES, "f_fs", 0);
+	if (IS_ERR_OR_NULL(ffs_ipc_log))
+		ffs_ipc_log =  NULL;
+
 #endif
 	return ret;
 }
@@ -1596,6 +1599,12 @@ static void functionfs_cleanup(void)
 
 	pr_info("unloading\n");
 	unregister_filesystem(&ffs_fs_type);
+#ifdef CONFIG_USB_FFS_IPC_LOGGING
+	if (ffs_ipc_log) {
+		ipc_log_context_destroy(ffs_ipc_log);
+		ffs_ipc_log = NULL;
+	}
+#endif
 }
 
 
@@ -1725,12 +1734,12 @@ static void ffs_data_clear(struct ffs_data *ffs)
 	ffs_log("enter: state %d setup_state %d flag %lu", ffs->state,
 		ffs->setup_state, ffs->flags);
 
-	pr_debug("%s: ffs->gadget= %p, ffs->flags= %lu\n",
+	pr_debug("%s: ffs->gadget= %pK, ffs->flags= %lu\n",
 				__func__, ffs->gadget, ffs->flags);
 	ffs_closed(ffs);
 
 	if (ffs->gadget)
-		pr_err("%s: ffs:%p ffs->gadget= %p, ffs->flags= %lu\n",
+		pr_err("%s: ffs:%pK ffs->gadget= %pK, ffs->flags= %lu\n",
 				__func__, ffs, ffs->gadget, ffs->flags);
 	BUG_ON(ffs->gadget);
 
@@ -1819,7 +1828,7 @@ static int functionfs_bind(struct ffs_data *ffs, struct usb_composite_dev *cdev)
 
 	ffs->gadget = cdev->gadget;
 
-	ffs_log("exit: state %d setup_state %d flag %lu gadget %p\n",
+	ffs_log("exit: state %d setup_state %d flag %lu gadget %pK\n",
 			ffs->state, ffs->setup_state, ffs->flags, ffs->gadget);
 
 	ffs_data_get(ffs);
@@ -1835,7 +1844,7 @@ static void functionfs_unbind(struct ffs_data *ffs)
 		ffs->ep0req = NULL;
 		ffs->gadget = NULL;
 		clear_bit(FFS_FL_BOUND, &ffs->flags);
-		ffs_log("state %d setup_state %d flag %lu gadget %p\n",
+		ffs_log("state %d setup_state %d flag %lu gadget %pK\n",
 			ffs->state, ffs->setup_state, ffs->flags, ffs->gadget);
 		ffs_data_put(ffs);
 	}
@@ -3129,6 +3138,7 @@ static int _ffs_func_bind(struct usb_configuration *c,
 	const int super = func->ffs->ss_descs_count;
 
 	int fs_len, hs_len, ss_len, ret, i;
+	struct ffs_ep *eps_ptr;
 
 	/* Make it a single chunk, less management later on */
 	vla_group(d);
@@ -3180,12 +3190,9 @@ static int _ffs_func_bind(struct usb_configuration *c,
 	       ffs->raw_descs_length);
 
 	memset(vla_ptr(vlabuf, d, inums), 0xff, d_inums__sz);
-	for (ret = ffs->eps_count; ret; --ret) {
-		struct ffs_ep *ptr;
-
-		ptr = vla_ptr(vlabuf, d, eps);
-		ptr[ret].num = -1;
-	}
+	eps_ptr = vla_ptr(vlabuf, d, eps);
+	for (i = 0; i < ffs->eps_count; i++)
+		eps_ptr[i].num = -1;
 
 	/* Save pointers
 	 * d_eps == vlabuf, func->eps used to kfree vlabuf later

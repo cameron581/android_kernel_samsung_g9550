@@ -100,7 +100,7 @@ struct msm_compr_gapless_state {
 
 static unsigned int supported_sample_rates[] = {
 	8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000,
-	88200, 96000, 176400, 192000, 352800, 384000, 2822400, 5644800
+	88200, 96000, 128000, 176400, 192000, 352800, 384000, 2822400, 5644800
 };
 
 struct msm_compr_pdata {
@@ -754,7 +754,7 @@ static void populate_codec_list(struct msm_compr_audio *prtd)
 			COMPR_PLAYBACK_MIN_NUM_FRAGMENTS;
 	prtd->compr_cap.max_fragments =
 			COMPR_PLAYBACK_MAX_NUM_FRAGMENTS;
-	prtd->compr_cap.num_codecs = 14;
+	prtd->compr_cap.num_codecs = 15;
 	prtd->compr_cap.codecs[0] = SND_AUDIOCODEC_MP3;
 	prtd->compr_cap.codecs[1] = SND_AUDIOCODEC_AAC;
 	prtd->compr_cap.codecs[2] = SND_AUDIOCODEC_AC3;
@@ -769,6 +769,7 @@ static void populate_codec_list(struct msm_compr_audio *prtd)
 	prtd->compr_cap.codecs[11] = SND_AUDIOCODEC_APE;
 	prtd->compr_cap.codecs[12] = SND_AUDIOCODEC_DTS;
 	prtd->compr_cap.codecs[13] = SND_AUDIOCODEC_DSD;
+	prtd->compr_cap.codecs[14] = SND_AUDIOCODEC_APTX;
 }
 
 static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
@@ -788,6 +789,7 @@ static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
 	struct asm_alac_cfg alac_cfg;
 	struct asm_ape_cfg ape_cfg;
 	struct asm_dsd_cfg dsd_cfg;
+	struct aptx_dec_bt_addr_cfg aptx_cfg;
 	union snd_codec_options *codec_options;
 
 	int ret = 0;
@@ -863,6 +865,9 @@ static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
 		if (prtd->codec_param.codec.format ==
 					SND_AUDIOSTREAMFORMAT_MP4ADTS)
 			aac_cfg.format = 0x0;
+		else if (prtd->codec_param.codec.format ==
+					SND_AUDIOSTREAMFORMAT_MP4LATM)
+			aac_cfg.format = 0x04;
 		else
 			aac_cfg.format = 0x03;
 		aac_cfg.ch_cfg = prtd->num_channels;
@@ -1020,6 +1025,24 @@ static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
 		if (ret < 0)
 			pr_err("%s: CMD DSD Format block failed ret %d\n",
 				__func__, ret);
+		break;
+	case FORMAT_APTX:
+		pr_debug("SND_AUDIOCODEC_APTX\n");
+		memset(&aptx_cfg, 0x0, sizeof(struct aptx_dec_bt_addr_cfg));
+		ret = q6asm_stream_media_format_block_aptx_dec(
+							prtd->audio_client,
+							prtd->sample_rate,
+							stream_id);
+		if (ret >= 0) {
+			aptx_cfg.nap = codec_options->aptx_dec.nap;
+			aptx_cfg.uap = codec_options->aptx_dec.uap;
+			aptx_cfg.lap = codec_options->aptx_dec.lap;
+			q6asm_set_aptx_dec_bt_addr(prtd->audio_client,
+							&aptx_cfg);
+		} else {
+			pr_err("%s: CMD Format block failed ret %d\n",
+					 __func__, ret);
+		}
 		break;
 	default:
 		pr_debug("%s, unsupported format, skip", __func__);
@@ -1565,6 +1588,7 @@ static int msm_compr_playback_free(struct snd_compr_stream *cstream)
 	kfree(pdata->dec_params[soc_prtd->dai_link->be_id]);
 	pdata->dec_params[soc_prtd->dai_link->be_id] = NULL;
 	kfree(prtd);
+	runtime->private_data = NULL;
 
 	return 0;
 }
@@ -1624,6 +1648,7 @@ static int msm_compr_capture_free(struct snd_compr_stream *cstream)
 	q6asm_audio_client_free(ac);
 
 	kfree(prtd);
+	runtime->private_data = NULL;
 
 	return 0;
 }
@@ -1790,6 +1815,12 @@ static int msm_compr_set_params(struct snd_compr_stream *cstream,
 	case SND_AUDIOCODEC_DSD: {
 		pr_debug("%s: SND_AUDIOCODEC_DSD\n", __func__);
 		prtd->codec = FORMAT_DSD;
+		break;
+	}
+
+	case SND_AUDIOCODEC_APTX: {
+		pr_debug("%s: SND_AUDIOCODEC_APTX\n", __func__);
+		prtd->codec = FORMAT_APTX;
 		break;
 	}
 
@@ -2663,6 +2694,7 @@ static int msm_compr_get_codec_caps(struct snd_compr_stream *cstream,
 	case SND_AUDIOCODEC_DTS:
 		break;
 	case SND_AUDIOCODEC_DSD:
+	case SND_AUDIOCODEC_APTX:
 		break;
 	default:
 		pr_err("%s: Unsupported audio codec %d\n",
@@ -3075,6 +3107,7 @@ static int msm_compr_send_dec_params(struct snd_compr_stream *cstream,
 	switch (prtd->codec) {
 	case FORMAT_MP3:
 	case FORMAT_MPEG4_AAC:
+	case FORMAT_APTX:
 		pr_debug("%s: no runtime parameters for codec: %d\n", __func__,
 			 prtd->codec);
 		break;
@@ -3141,6 +3174,7 @@ static int msm_compr_dec_params_put(struct snd_kcontrol *kcontrol,
 	case FORMAT_APE:
 	case FORMAT_DTS:
 	case FORMAT_DSD:
+	case FORMAT_APTX:
 		pr_debug("%s: no runtime parameters for codec: %d\n", __func__,
 			 prtd->codec);
 		break;
@@ -3190,48 +3224,45 @@ static int msm_compr_playback_app_type_cfg_put(struct snd_kcontrol *kcontrol,
 				      struct snd_ctl_elem_value *ucontrol)
 {
 	u64 fe_id = kcontrol->private_value;
+	int session_type = SESSION_TYPE_RX;
+	int be_id = ucontrol->value.integer.value[3];
+	int ret = 0;
 	int app_type;
 	int acdb_dev_id;
 	int sample_rate = 48000;
 
-	pr_debug("%s: fe_id- %llu\n", __func__, fe_id);
-	if (fe_id >= MSM_FRONTEND_DAI_MAX) {
-		pr_err("%s Received out of bounds fe_id %llu\n",
-			__func__, fe_id);
-		return -EINVAL;
-	}
-
 	app_type = ucontrol->value.integer.value[0];
 	acdb_dev_id = ucontrol->value.integer.value[1];
-	if (0 != ucontrol->value.integer.value[2])
+	if (ucontrol->value.integer.value[2] != 0)
 		sample_rate = ucontrol->value.integer.value[2];
-	pr_debug("%s: app_type- %d acdb_dev_id- %d sample_rate- %d session_type- %d\n",
-		__func__, app_type, acdb_dev_id, sample_rate, SESSION_TYPE_RX);
-	msm_pcm_routing_reg_stream_app_type_cfg(fe_id, app_type,
-			acdb_dev_id, sample_rate, SESSION_TYPE_RX);
+	pr_debug("%s: fe_id- %llu session_type- %d be_id- %d app_type- %d acdb_dev_id- %d sample_rate- %d\n",
+		__func__, fe_id, session_type, be_id,
+		app_type, acdb_dev_id, sample_rate);
+	ret = msm_pcm_routing_reg_stream_app_type_cfg(fe_id, session_type,
+						      be_id, app_type,
+						      acdb_dev_id, sample_rate);
+	if (ret < 0)
+		pr_err("%s: msm_pcm_routing_reg_stream_app_type_cfg failed returned %d\n",
+			__func__, ret);
 
-	return 0;
+	return ret;
 }
 
 static int msm_compr_playback_app_type_cfg_get(struct snd_kcontrol *kcontrol,
 				      struct snd_ctl_elem_value *ucontrol)
 {
 	u64 fe_id = kcontrol->private_value;
+	int session_type = SESSION_TYPE_RX;
+	int be_id = ucontrol->value.integer.value[3];
 	int ret = 0;
 	int app_type;
 	int acdb_dev_id;
 	int sample_rate;
 
-	pr_debug("%s: fe_id- %llu\n", __func__, fe_id);
-	if (fe_id >= MSM_FRONTEND_DAI_MAX) {
-		pr_err("%s Received out of bounds fe_id %llu\n",
-			__func__, fe_id);
-		ret = -EINVAL;
-		goto done;
-	}
-
-	ret = msm_pcm_routing_get_stream_app_type_cfg(fe_id, SESSION_TYPE_RX,
-		&app_type, &acdb_dev_id, &sample_rate);
+	ret = msm_pcm_routing_get_stream_app_type_cfg(fe_id, session_type,
+						      be_id, &app_type,
+						      &acdb_dev_id,
+						      &sample_rate);
 	if (ret < 0) {
 		pr_err("%s: msm_pcm_routing_get_stream_app_type_cfg failed returned %d\n",
 			__func__, ret);
@@ -3241,8 +3272,8 @@ static int msm_compr_playback_app_type_cfg_get(struct snd_kcontrol *kcontrol,
 	ucontrol->value.integer.value[0] = app_type;
 	ucontrol->value.integer.value[1] = acdb_dev_id;
 	ucontrol->value.integer.value[2] = sample_rate;
-	pr_debug("%s: fedai_id %llu, session_type %d, app_type %d, acdb_dev_id %d, sample_rate %d\n",
-		__func__, fe_id, SESSION_TYPE_RX,
+	pr_debug("%s: fedai_id %llu, session_type %d, be_id %d, app_type %d, acdb_dev_id %d, sample_rate %d\n",
+		__func__, fe_id, session_type, be_id,
 		app_type, acdb_dev_id, sample_rate);
 done:
 	return ret;
@@ -3252,48 +3283,45 @@ static int msm_compr_capture_app_type_cfg_put(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u64 fe_id = kcontrol->private_value;
+	int session_type = SESSION_TYPE_TX;
+	int be_id = ucontrol->value.integer.value[3];
+	int ret = 0;
 	int app_type;
 	int acdb_dev_id;
 	int sample_rate = 48000;
-
-	pr_debug("%s: fe_id- %llu\n", __func__, fe_id);
-	if (fe_id >= MSM_FRONTEND_DAI_MAX) {
-		pr_err("%s Received out of bounds fe_id %llu\n",
-			__func__, fe_id);
-		return -EINVAL;
-	}
 
 	app_type = ucontrol->value.integer.value[0];
 	acdb_dev_id = ucontrol->value.integer.value[1];
 	if (ucontrol->value.integer.value[2] != 0)
 		sample_rate = ucontrol->value.integer.value[2];
-	pr_debug("%s: app_type- %d acdb_dev_id- %d sample_rate- %d session_type- %d\n",
-		__func__, app_type, acdb_dev_id, sample_rate, SESSION_TYPE_TX);
-	msm_pcm_routing_reg_stream_app_type_cfg(fe_id, app_type,
-		acdb_dev_id, sample_rate, SESSION_TYPE_TX);
+	pr_debug("%s: fe_id- %llu session_type- %d be_id- %d app_type- %d acdb_dev_id- %d sample_rate- %d\n",
+		__func__, fe_id, session_type, be_id,
+		app_type, acdb_dev_id, sample_rate);
+	ret = msm_pcm_routing_reg_stream_app_type_cfg(fe_id, session_type,
+						      be_id, app_type,
+						      acdb_dev_id, sample_rate);
+	if (ret < 0)
+		pr_err("%s: msm_pcm_routing_reg_stream_app_type_cfg failed returned %d\n",
+			__func__, ret);
 
-	return 0;
+	return ret;
 }
 
 static int msm_compr_capture_app_type_cfg_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u64 fe_id = kcontrol->private_value;
+	int session_type = SESSION_TYPE_TX;
+	int be_id = ucontrol->value.integer.value[3];
 	int ret = 0;
 	int app_type;
 	int acdb_dev_id;
 	int sample_rate;
 
-	pr_debug("%s: fe_id- %llu\n", __func__, fe_id);
-	if (fe_id >= MSM_FRONTEND_DAI_MAX) {
-		pr_err("%s Received out of bounds fe_id %llu\n",
-			__func__, fe_id);
-		ret = -EINVAL;
-		goto done;
-	}
-
-	ret = msm_pcm_routing_get_stream_app_type_cfg(fe_id, SESSION_TYPE_TX,
-		&app_type, &acdb_dev_id, &sample_rate);
+	ret = msm_pcm_routing_get_stream_app_type_cfg(fe_id, session_type,
+						      be_id, &app_type,
+						      &acdb_dev_id,
+						      &sample_rate);
 	if (ret < 0) {
 		pr_err("%s: msm_pcm_routing_get_stream_app_type_cfg failed returned %d\n",
 			__func__, ret);
@@ -3303,8 +3331,8 @@ static int msm_compr_capture_app_type_cfg_get(struct snd_kcontrol *kcontrol,
 	ucontrol->value.integer.value[0] = app_type;
 	ucontrol->value.integer.value[1] = acdb_dev_id;
 	ucontrol->value.integer.value[2] = sample_rate;
-	pr_debug("%s: fedai_id %llu, session_type %d, app_type %d, acdb_dev_id %d, sample_rate %d\n",
-		__func__, fe_id, SESSION_TYPE_TX,
+	pr_debug("%s: fedai_id %llu, session_type %d, be_id %d, app_type %d, acdb_dev_id %d, sample_rate %d\n",
+		__func__, fe_id, session_type, be_id,
 		app_type, acdb_dev_id, sample_rate);
 done:
 	return ret;

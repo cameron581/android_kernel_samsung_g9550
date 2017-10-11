@@ -30,15 +30,11 @@
 #include <linux/errno.h>
 #include <linux/hdcp_qseecom.h>
 #include <linux/kthread.h>
+#ifdef CONFIG_SEC_DISPLAYPORT
+#include <linux/dp_logger.h>
+#endif
 
 #include "qseecom_kernel.h"
-
-#ifdef CONFIG_SEC_DISPLAYPORT
-#ifdef pr_debug
-#undef pr_debug
-#define pr_debug	pr_info
-#endif
-#endif
 
 #define TZAPP_NAME            "hdcp2p2"
 #define HDCP1_APP_NAME        "hdcp1"
@@ -2110,7 +2106,8 @@ static void hdcp_lib_msg_recvd(struct hdcp_lib_handle *handle)
 	    (rc == 0) && (rsp_buf->status == 0)) {
 		pr_debug("Got Auth_Stream_Ready, nothing sent to rx\n");
 
-		if (!hdcp_lib_enable_encryption(handle)) {
+		if (!handle->authenticated &&
+		    !hdcp_lib_enable_encryption(handle)) {
 			handle->authenticated = true;
 
 			cdata.cmd = HDMI_HDCP_WKUP_CMD_STATUS_SUCCESS;

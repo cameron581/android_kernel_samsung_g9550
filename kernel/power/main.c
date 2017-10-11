@@ -805,6 +805,7 @@ power_attr(pm_freeze_timeout);
 #endif	/* CONFIG_FREEZER*/
 
 #ifdef CONFIG_SEC_PM
+#ifndef CONFIG_MACH_KELLYLTE_CHN_CTC
 extern int qpnp_set_resin_wk_int(int en);
 static int volkey_wakeup = 1;
 static ssize_t volkey_wakeup_show(struct kobject *kobj,
@@ -834,6 +835,7 @@ static ssize_t volkey_wakeup_store(struct kobject *kobj,
 }
 
 power_attr(volkey_wakeup);
+#endif
 
 int poff_status;
 static ssize_t rtc_status_show(struct kobject *kobj,
@@ -919,7 +921,9 @@ static struct attribute * g[] = {
 	&pm_freeze_timeout_attr.attr,
 #endif
 #ifdef CONFIG_SEC_PM
+#ifndef CONFIG_MACH_KELLYLTE_CHN_CTC
 	&volkey_wakeup_attr.attr,
+#endif
 	&rtc_status_attr.attr,
 #endif
 #if defined(CONFIG_FOTA_LIMIT)

@@ -94,6 +94,7 @@ struct sx9320_p {
 	bool skip_data;
 	bool check_usb;
 	u8 normal_th;
+	u8 normal_th_ta;
 	u8 normal_th_buf;
 	u8 phen;
 	u8 gain;
@@ -109,6 +110,10 @@ struct sx9320_p {
 	u8 avgnegfilt;
 	u8 avgthresh;
 	u8 debouncer;
+	u8 afeph0;
+	u8 afeph1;
+	u8 afeph2;
+	u8 afeph3;
 	int irq;
 	int gpio_nirq;
 	int state;
@@ -289,13 +294,9 @@ static void sx9320_initialize_chip(struct sx9320_p *data)
 	sx9320_initialize_register(data);
 }
 
-static int sx9320_set_offset_calibration(struct sx9320_p *data)
+static void sx9320_set_offset_calibration(struct sx9320_p *data)
 {
-	int ret = 0;
-
-	ret = sx9320_i2c_write(data, SX9320_STAT2_REG, 0x0F);
-
-	return ret;
+	sx9320_i2c_write(data, SX9320_STAT2_REG, 0x0F);
 }
 
 static void sx9320_send_event(struct sx9320_p *data, u8 state)
@@ -308,8 +309,10 @@ static void sx9320_send_event(struct sx9320_p *data, u8 state)
 		pr_info("[SX9320]: %s - button released\n", __func__);
 	}
 
-	if (data->skip_data == true)
+	if (data->skip_data == true) {
+		pr_info("[SX9320]: %s - skip grip event\n", __func__);
 		return;
+	}
 
 	if (state == ACTIVE)
 		input_report_rel(data->input, REL_MISC, 1);
@@ -1512,14 +1515,18 @@ static void sx9320_initialize_variable(struct sx9320_p *data)
 	sx9320_set_specific_register(16, 5, 3, data->avgnegfilt);
 	sx9320_set_specific_register(17, 3, 2, data->debouncer);
 	sx9320_set_specific_register(17, 5, 4, data->hyst);
+	sx9320_set_specific_register(8, 5, 0, data->afeph0);
+	sx9320_set_specific_register(9, 5, 0, data->afeph1);
+	sx9320_set_specific_register(10, 5, 0, data->afeph2);
+	sx9320_set_specific_register(11, 5, 0, data->afeph3);
 
 	sx9320_get_again(data);
 }
 
-static void sx9320_read_setupreg(struct device_node *dnode, char *str, u8 *val)
+static int sx9320_read_setupreg(struct device_node *dnode, char *str, u8 *val)
 {
 	u32 temp_val;
-	int ret;
+	int ret = 0;
 
 	ret = of_property_read_u32(dnode, str, &temp_val);
 
@@ -1528,6 +1535,7 @@ static void sx9320_read_setupreg(struct device_node *dnode, char *str, u8 *val)
 	else
 		pr_err("[SX9320]: %s - %s: property read err 0x%2x (%d)\n",
 			__func__, str, temp_val, ret);
+	return ret;
 }
 
 static int sx9320_parse_dt(struct sx9320_p *data, struct device *dev)
@@ -1559,6 +1567,24 @@ static int sx9320_parse_dt(struct sx9320_p *data, struct device *dev)
 	sx9320_read_setupreg(node, SX9320_AVGTHRESH, &data->avgthresh);
 	sx9320_read_setupreg(node, SX9320_DEBOUNCER, &data->debouncer);
 	sx9320_read_setupreg(node, SX9320_NORMALTHD, &data->normal_th);
+	sx9320_read_setupreg(node, SX9320_NORMALTHD_TA, &data->normal_th_ta);
+
+	if (sx9320_read_setupreg(node, SX9320_AFEPH0, &data->afeph0))
+		data->afeph0 = setup_reg[8].val;
+	if (sx9320_read_setupreg(node, SX9320_AFEPH1, &data->afeph1))
+		data->afeph1 = setup_reg[9].val;
+	if (sx9320_read_setupreg(node, SX9320_AFEPH2, &data->afeph2))
+		data->afeph2 = setup_reg[10].val;
+	if (sx9320_read_setupreg(node, SX9320_AFEPH3, &data->afeph3))
+		data->afeph3 = setup_reg[11].val;
+
+	if (data->normal_th_ta == 0) {
+		pr_info("[SX9320]: %s - dt has no TA thd \n", __func__);
+		data->normal_th_ta = data->normal_th;
+	}
+
+	pr_info("[SX9320]: afeph0:%x, afeph1:%x, afeph2:%x, afeph3:%x\n",
+		data->afeph0, data->afeph1, data->afeph2, data->afeph3);
 
 	return 0;
 }
@@ -1571,10 +1597,10 @@ static int sx9320_ccic_handle_notification(struct notifier_block *nb,
 
 	struct sx9320_p *pdata =
 		container_of(nb, struct sx9320_p, cpuidle_ccic_nb);
-	static int pre_attach;
 
-	if (pre_attach == usb_status.attach)
-		return 0;
+	pr_info("[SX9320]: %s - src = %d, dest = %d, id = %d, attach = %d, drp = %d\n",
+		__func__, usb_status.src, usb_status.dest, usb_status.id, usb_status.attach, usb_status.drp);
+
 	/*
 	 * USB_STATUS_NOTIFY_DETACH = 0,
 	 * USB_STATUS_NOTIFY_ATTACH_DFP = 1, // Host
@@ -1583,23 +1609,33 @@ static int sx9320_ccic_handle_notification(struct notifier_block *nb,
 	 */
 
 	if (pdata->init_done == ON) {
+
 		switch (usb_status.drp) {
 		case USB_STATUS_NOTIFY_ATTACH_UFP:
 		case USB_STATUS_NOTIFY_ATTACH_DFP:
-		case USB_STATUS_NOTIFY_DETACH:
-			pr_info("[SX9320]: %s - drp = %d attat = %d\n",
-				__func__, usb_status.drp,
-				usb_status.attach);
 			sx9320_set_offset_calibration(pdata);
+			if (usb_status.id == 3 && usb_status.attach == 1)
+				pdata->normal_th = pdata->normal_th_ta;
+			break;
+		case USB_STATUS_NOTIFY_DETACH:
+			sx9320_set_offset_calibration(pdata);
+			if (usb_status.id == 1 && usb_status.attach == 0)
+				pdata->normal_th = pdata->normal_th_buf;
 			break;
 		default:
 			pr_info("[SX9320]: %s - DRP type : %d\n",
 				__func__, usb_status.drp);
 			break;
 		}
-	}
-
-	pre_attach = usb_status.attach;
+	
+		if (pdata->phen < 2)
+			sx9320_i2c_write(pdata, SX9320_PROXCTRL6_REG,
+				pdata->normal_th);
+		else
+			sx9320_i2c_write(pdata, SX9320_PROXCTRL7_REG,
+				pdata->normal_th);
+	} else
+		pr_info("[SX9320]: %s - has not initialized\n", __func__);
 
 	return 0;
 }

@@ -1399,6 +1399,7 @@ mtpg_function_bind(struct usb_configuration *c, struct usb_function *f)
 	struct usb_request	*req;
 	struct usb_ep		*ep;
 	int			i, id;
+	int			status = 0;
 
 	/* Allocate string descriptor numbers ... note that string
 	 * contents can be overridden by the composite_dev glue.
@@ -1409,6 +1410,16 @@ mtpg_function_bind(struct usb_configuration *c, struct usb_function *f)
 	if (id < 0) {
 		printk(KERN_ERR "[%s]Error in usb_interface_id\n", __func__);
 		return id;
+	}
+
+	if (strings_dev_mtp[F_MTP_IDX].id == 0) {
+		status = usb_string_id(c->cdev);
+
+		if (status < 0)
+			return status;
+
+		strings_dev_mtp[F_MTP_IDX].id = status;
+		mtpg_interface_desc.iInterface = status;
 	}
 
 	mtpg_interface_desc.bInterfaceNumber = id;

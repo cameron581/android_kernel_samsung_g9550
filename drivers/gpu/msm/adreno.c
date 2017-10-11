@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -41,6 +41,10 @@
 /* Include the master list of GPU cores that are supported */
 #include "adreno-gpulist.h"
 #include "adreno_dispatch.h"
+#if defined(CONFIG_SEC_ABC)
+#include <linux/sec_abc.h>
+#endif
+
 
 #undef MODULE_PARAM_PREFIX
 #define MODULE_PARAM_PREFIX "adreno."
@@ -490,6 +494,19 @@ static const struct input_device_id adreno_input_ids[] = {
 				BIT_MASK(ABS_MT_POSITION_X) |
 				BIT_MASK(ABS_MT_POSITION_Y) },
 	},
+#if defined(CONFIG_INPUT_WACOM)
+	/*
+	*	For S-pen input_event.
+	*	Request from graphics team(biam.lee)
+	*/
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_EVBIT,
+		.evbit = { BIT_MASK(EV_ABS) },
+		.absbit = { [BIT_WORD(ABS_X)] =
+				BIT_MASK(ABS_TILT_X) |
+				BIT_MASK(ABS_TILT_Y)},
+	},
+#endif
 	{ },
 };
 
@@ -562,6 +579,9 @@ void adreno_hang_int_callback(struct adreno_device *adreno_dev, int bit)
 {
 	KGSL_DRV_CRIT_RATELIMIT(KGSL_DEVICE(adreno_dev),
 			"MISC: GPU hang detected\n");
+#if defined(CONFIG_SEC_ABC)
+	sec_abc_send_event("MODULE=gpu_qc@ERROR=gpu_fault");
+#endif	
 	adreno_irqctrl(adreno_dev, 0);
 
 	/* Trigger a fault in the dispatcher - this will effect a restart */
@@ -591,6 +611,9 @@ static irqreturn_t adreno_irq_handler(struct kgsl_device *device)
 	irqreturn_t ret = IRQ_NONE;
 	unsigned int status = 0, tmp, int_bit;
 	int i;
+
+	atomic_inc(&adreno_dev->pending_irq_refcnt);
+	smp_mb__after_atomic();
 
 	adreno_readreg(adreno_dev, ADRENO_REG_RBBM_INT_0_STATUS, &status);
 
@@ -629,6 +652,10 @@ static irqreturn_t adreno_irq_handler(struct kgsl_device *device)
 	if (status & int_bit)
 		adreno_writereg(adreno_dev, ADRENO_REG_RBBM_INT_CLEAR_CMD,
 				int_bit);
+
+	smp_mb__before_atomic();
+	atomic_dec(&adreno_dev->pending_irq_refcnt);
+	smp_mb__after_atomic();
 
 	return ret;
 
@@ -2030,7 +2057,18 @@ inline unsigned int adreno_irq_pending(struct adreno_device *adreno_dev)
 
 	adreno_readreg(adreno_dev, ADRENO_REG_RBBM_INT_0_STATUS, &status);
 
-	return (status & gpudev->irq->mask) ? 1 : 0;
+	/*
+	 * IRQ handler clears the RBBM INT0 status register immediately
+	 * entering the ISR before actually serving the interrupt because
+	 * of this we can't rely only on RBBM INT0 status only.
+	 * Use pending_irq_refcnt along with RBBM INT0 to correctly
+	 * determine whether any IRQ is pending or not.
+	 */
+	if ((status & gpudev->irq->mask) ||
+		atomic_read(&adreno_dev->pending_irq_refcnt))
+		return 1;
+	else
+		return 0;
 }
 
 

@@ -110,6 +110,17 @@ Optional Properties:
 - qcom,l2pc-cpu-mask-latency:
 				The CPU mask latency in microseconds to avoid L2PC
 				on masked CPUs.
+
+- qcom,gpu-cx-ipeak:
+				To handle Cx peak current limit.
+				<phandle bit>
+				phandle - phandle of cx ipeak device node
+				bit     - bit number of client in relevant register
+- qcom,gpu-cx-ipeak-clk:
+				GPU clock threshold for Cx Ipeak voting. KGSL votes
+				to Cx Ipeak driver when GPU clock crosses this threshold.
+				Cx Ipeak can limit peak current based on voting from other clients.
+
 - qcom,force-32bit:
 				Force the GPU to use 32 bit data sizes even if
 				it is capable of doing 64 bit.
@@ -142,6 +153,12 @@ Optional Properties:
 - qcom,tsens-name:
 				Specify the name of GPU temperature sensor. This name will be used
 				to get the temperature from the thermal driver API.
+
+- qcom,enable-midframe-timer:
+				Boolean. Enables the use of midframe sampling timer. This timer
+				samples the GPU powerstats if the cmdbatch expiry takes longer than
+				the threshold set by KGSL_GOVERNOR_CALL_INTERVAL. Enable only if
+				target has NAP state enabled.
 
 GPU Quirks:
 - qcom,gpu-quirk-two-pass-use-wfi:
@@ -187,7 +204,7 @@ Documentation/devicetree/bindings/coresight/coresight.txt
 - coresight-child-list   List of phandles pointing to the children of this
                          component.
 - coresight-child-ports  List of input port numbers of the children.
-
+- coresight-atid         The unique ATID value of the coresight device
 
 Example of A330 GPU in MSM8916:
 

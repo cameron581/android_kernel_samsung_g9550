@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -272,6 +272,11 @@ static struct spcom_device *spcom_dev;
 static int spcom_create_channel_chardev(const char *name);
 static int spcom_open(struct spcom_channel *ch, unsigned int timeout_msec);
 static int spcom_close(struct spcom_channel *ch);
+static void spcom_notify_rx_abort(void *handle, const void *priv,
+				  const void *pkt_priv);
+static struct spcom_channel *spcom_find_channel_by_name(const char *name);
+static int spcom_unlock_ion_buf(struct spcom_channel *ch, int fd);
+static void spcom_rx_abort_pending_server(void);
 
 /**
  * spcom_is_ready() - driver is initialized and ready.
@@ -312,6 +317,10 @@ static int spcom_create_predefined_channels_chardev(void)
 {
 	int i;
 	int ret;
+	static bool is_predefined_created;
+
+	if (is_predefined_created)
+		return 0;
 
 	for (i = 0; i < SPCOM_MAX_CHANNELS; i++) {
 		const char *name = spcom_dev->predefined_ch_name[i];
@@ -325,6 +334,8 @@ static int spcom_create_predefined_channels_chardev(void)
 			return -EFAULT;
 		}
 	}
+
+	is_predefined_created = true;
 
 	return 0;
 }
@@ -345,6 +356,14 @@ static int spcom_create_predefined_channels_chardev(void)
 static void spcom_link_state_notif_cb(struct glink_link_state_cb_info *cb_info,
 				      void *priv)
 {
+	struct spcom_channel *ch = NULL;
+	const char *ch_name = "sp_kernel";
+
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return;
+	}
+
 	spcom_dev->link_state = cb_info->link_state;
 
 	pr_debug("spcom_link_state_notif_cb called. transport = %s edge = %s\n",
@@ -352,11 +371,25 @@ static void spcom_link_state_notif_cb(struct glink_link_state_cb_info *cb_info,
 
 	switch (cb_info->link_state) {
 	case GLINK_LINK_STATE_UP:
-		pr_debug("GLINK_LINK_STATE_UP.\n");
+		pr_info("GLINK_LINK_STATE_UP.\n");
 		spcom_create_predefined_channels_chardev();
 		break;
 	case GLINK_LINK_STATE_DOWN:
-		pr_debug("GLINK_LINK_STATE_DOWN.\n");
+		pr_err("GLINK_LINK_STATE_DOWN.\n");
+
+		/*
+		 * Free all the SKP ION buffers that were locked
+		 * for SPSS app swapping, when remote subsystem reset.
+		 */
+		pr_debug("Free all SKP ION buffers on SSR.\n");
+		ch = spcom_find_channel_by_name(ch_name);
+		if (!ch)
+			pr_err("failed to find channel [%s].\n", ch_name);
+		else
+			spcom_unlock_ion_buf(ch, SPCOM_ION_FD_UNLOCK_ALL);
+
+		pr_debug("Rx-Abort pending servers.\n");
+		spcom_rx_abort_pending_server();
 		break;
 	default:
 		pr_err("unknown link_state [%d].\n", cb_info->link_state);
@@ -466,7 +499,14 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 		 * This is not expected on normal operation.
 		 * This may happen upon remote SSR.
 		 */
-		pr_debug("GLINK_REMOTE_DISCONNECTED, ch [%s].\n", ch->name);
+		pr_err("GLINK_REMOTE_DISCONNECTED, ch [%s].\n", ch->name);
+
+		/*
+		 * Abort any blocking read() operation.
+		 * The glink notification might be after REMOTE_DISCONNECT.
+		 */
+		spcom_notify_rx_abort(NULL, ch, NULL);
+
 		/*
 		 * after glink_close(),
 		 * expecting notify GLINK_LOCAL_DISCONNECTED
@@ -515,7 +555,7 @@ static void spcom_notify_rx_abort(void *handle, const void *priv,
 
 	pr_debug("ch [%s] pending rx aborted.\n", ch->name);
 
-	if (spcom_is_channel_connected(ch)) {
+	if (spcom_is_channel_open(ch) && (!ch->rx_abort)) {
 		ch->rx_abort = true;
 		complete_all(&ch->rx_done);
 	}
@@ -535,9 +575,9 @@ static void spcom_notify_tx_abort(void *handle, const void *priv,
 
 	pr_debug("ch [%s] pending tx aborted.\n", ch->name);
 
-	if (spcom_is_channel_connected(ch)) {
-		complete_all(&ch->tx_done);
+	if (spcom_is_channel_connected(ch) && (!ch->tx_abort)) {
 		ch->tx_abort = true;
+		complete_all(&ch->tx_done);
 	}
 }
 
@@ -731,7 +771,9 @@ static int spcom_close(struct spcom_channel *ch)
 
 	ch->glink_handle = NULL;
 	ch->ref_count = 0;
-
+	ch->rx_abort = false;
+	ch->tx_abort = false;
+	ch->glink_state = GLINK_LOCAL_DISCONNECTED;
 	ch->txn_id = INITIAL_TXN_ID; /* use non-zero nonce for debug */
 	ch->pid = 0;
 
@@ -916,6 +958,13 @@ static int spcom_get_next_request_size(struct spcom_channel *ch)
 
 	pr_debug("Wait for Rx Done, ch [%s].\n", ch->name);
 	wait_for_completion(&ch->rx_done);
+
+	/* Check Rx Abort on SP reset */
+	if (ch->rx_abort) {
+		pr_err("rx aborted.\n");
+		goto exit_error;
+	}
+
 	if (ch->actual_rx_size <= 0) {
 		pr_err("invalid rx size [%d] ch [%s].\n",
 		       ch->actual_rx_size, ch->name);
@@ -941,6 +990,27 @@ exit_error:
 
 }
 
+/**
+ * spcom_rx_abort_pending_server() - abort pending server rx on SSR.
+ *
+ * Server that is waiting for request, but has no client connected,
+ * will not get RX-ABORT or REMOTE-DISCONNECT notification,
+ * that should cancel the server pending rx operation.
+ */
+static void spcom_rx_abort_pending_server(void)
+{
+	int i;
+
+	for (i = 0 ; i < ARRAY_SIZE(spcom_dev->channels); i++) {
+		struct spcom_channel *ch = &spcom_dev->channels[i];
+
+		if (ch->is_server) {
+			pr_debug("rx-abort server on ch [%s].\n", ch->name);
+			spcom_notify_rx_abort(NULL, ch, NULL);
+		}
+	}
+}
+
 /*======================================================================*/
 /*		General API for kernel drivers				*/
 /*======================================================================*/
@@ -952,7 +1022,10 @@ exit_error:
  */
 bool spcom_is_sp_subsystem_link_up(void)
 {
-	 return (spcom_dev->link_state == GLINK_LINK_STATE_UP);
+	if (spcom_dev == NULL)
+		return false;
+
+	return (spcom_dev->link_state == GLINK_LINK_STATE_UP);
 }
 EXPORT_SYMBOL(spcom_is_sp_subsystem_link_up);
 
@@ -973,6 +1046,11 @@ struct spcom_client *spcom_register_client(struct spcom_client_info *info)
 	const char *name;
 	struct spcom_channel *ch;
 	struct spcom_client *client;
+
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return NULL;
+	}
 
 	if (!info) {
 		pr_err("Invalid parameter.\n");
@@ -1015,6 +1093,11 @@ int spcom_unregister_client(struct spcom_client *client)
 {
 	struct spcom_channel *ch;
 
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return -ENODEV;
+	}
+
 	if (!client) {
 		pr_err("Invalid parameter.\n");
 		return -EINVAL;
@@ -1052,6 +1135,11 @@ int spcom_client_send_message_sync(struct spcom_client	*client,
 {
 	int ret;
 	struct spcom_channel *ch;
+
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return -ENODEV;
+	}
 
 	if (!client || !req_ptr || !resp_ptr) {
 		pr_err("Invalid parameter.\n");
@@ -1094,9 +1182,14 @@ bool spcom_client_is_server_connected(struct spcom_client *client)
 {
 	bool connected;
 
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return false;
+	}
+
 	if (!client) {
 		pr_err("Invalid parameter.\n");
-		return -EINVAL;
+		return false;
 	}
 
 	connected = spcom_is_channel_connected(client->ch);
@@ -1122,6 +1215,11 @@ struct spcom_server *spcom_register_service(struct spcom_service_info *info)
 	const char *name;
 	struct spcom_channel *ch;
 	struct spcom_server *server;
+
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return NULL;
+	}
 
 	if (!info) {
 		pr_err("Invalid parameter.\n");
@@ -1160,6 +1258,11 @@ EXPORT_SYMBOL(spcom_register_service);
 int spcom_unregister_service(struct spcom_server *server)
 {
 	struct spcom_channel *ch;
+
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return -ENODEV;
+	}
 
 	if (!server) {
 		pr_err("Invalid parameter.\n");
@@ -1225,6 +1328,11 @@ int spcom_server_wait_for_request(struct spcom_server	*server,
 	int ret;
 	struct spcom_channel *ch;
 
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return -ENODEV;
+	}
+
 	if (!server || !req_ptr) {
 		pr_err("Invalid parameter.\n");
 		return -EINVAL;
@@ -1257,6 +1365,11 @@ int spcom_server_send_response(struct spcom_server	*server,
 {
 	int ret;
 	struct spcom_channel *ch;
+
+	if (!spcom_is_ready()) {
+		pr_err("spcom is not ready.\n");
+		return -ENODEV;
+	}
 
 	if (!server || !resp_ptr) {
 		pr_err("Invalid parameter.\n");
@@ -1590,7 +1703,7 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 
 	if (size != sizeof(*cmd)) {
 		pr_err("cmd size [%d] , expected [%d].\n",
-					(int)size, (int) sizeof(*cmd));
+		       (int) size,  (int) sizeof(*cmd));
 		return -EINVAL;
 	}
 
@@ -1600,19 +1713,19 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 		return -ENODEV;
 	}
 
-
 	/* Get ION handle from fd - this increments the ref count */
 	ion_handle = ion_import_dma_buf(spcom_dev->ion_client, fd);
 	if (ion_handle == NULL) {
 		pr_err("fail to get ion handle.\n");
 		return -EINVAL;
 	}
+
 	pr_debug("ion handle ok.\n");
 
 	/* Check if this ION buffer is already locked */
 	for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
 		if (ch->ion_handle_table[i] == ion_handle) {
-			pr_debug("fd [%d] ion buf is already locked.\n", fd);
+			pr_err("fd [%d] ion buf is already locked.\n", fd);
 			/* decrement back the ref count */
 			ion_free(spcom_dev->ion_client, ion_handle);
 			return -EINVAL;
@@ -1624,12 +1737,73 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 		if (ch->ion_handle_table[i] == NULL) {
 			ch->ion_handle_table[i] = ion_handle;
 			ch->ion_fd_table[i] = fd;
-			pr_debug("locked ion buf#[%d], fd [%d].\n", i, fd);
+			pr_debug("ch [%s] locked ion buf #%d, fd [%d].\n",
+				ch->name, i, fd);
 			return 0;
 		}
 	}
 
+	pr_err("no free entry to store ion handle of fd [%d].\n", fd);
+	/* decrement back the ref count */
+	ion_free(spcom_dev->ion_client, ion_handle);
+
 	return -EFAULT;
+}
+
+/**
+ * spcom_unlock_ion_buf() - Unlock an ION buffer.
+ *
+ * Unlock an ION buffer, let it be free, when it is no longer being used by
+ * the remote subsystem.
+ */
+static int spcom_unlock_ion_buf(struct spcom_channel *ch, int fd)
+{
+	struct ion_client *ion_client = spcom_dev->ion_client;
+	int i;
+	bool found = false;
+
+	pr_debug("Unlock ion buf ch [%s] fd [%d].\n", ch->name, fd);
+
+	/* Check ION client */
+	if (ion_client == NULL) {
+		pr_err("fail to create ion client.\n");
+		return -ENODEV;
+	}
+
+	if (fd == (int) SPCOM_ION_FD_UNLOCK_ALL) {
+		pr_debug("unlocked ALL ion buf ch [%s].\n", ch->name);
+		found = true;
+		/* unlock all ION buf */
+		for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
+			if (ch->ion_handle_table[i] != NULL) {
+				pr_debug("unlocked ion buf #%d fd [%d].\n",
+					i, ch->ion_fd_table[i]);
+				ion_free(ion_client, ch->ion_handle_table[i]);
+				ch->ion_handle_table[i] = NULL;
+				ch->ion_fd_table[i] = -1;
+			}
+		}
+	} else {
+		/* unlock specific ION buf */
+		for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
+			if (ch->ion_fd_table[i] == fd) {
+				pr_debug("unlocked ion buf #%d fd [%d].\n",
+					i, ch->ion_fd_table[i]);
+				ion_free(ion_client, ch->ion_handle_table[i]);
+				ch->ion_handle_table[i] = NULL;
+				ch->ion_fd_table[i] = -1;
+				found = true;
+				break;
+			}
+		}
+	}
+
+	if (!found) {
+		pr_err("ch [%s] fd [%d] was not found.\n", ch->name, fd);
+		return -ENODEV;
+	}
+
+	return 0;
 }
 
 /**
@@ -1641,47 +1815,19 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 static int spcom_handle_unlock_ion_buf_command(struct spcom_channel *ch,
 					      void *cmd_buf, int size)
 {
+	int ret;
 	struct spcom_user_command *cmd = cmd_buf;
 	int fd = cmd->arg;
-	struct ion_client *ion_client = spcom_dev->ion_client;
-	int i;
 
 	if (size != sizeof(*cmd)) {
 		pr_err("cmd size [%d] , expected [%d].\n",
-					(int)size, (int) sizeof(*cmd));
+		       (int) size,  (int) sizeof(*cmd));
 		return -EINVAL;
 	}
 
-	/* Check ION client */
-	if (ion_client == NULL) {
-		pr_err("fail to create ion client.\n");
-		return -ENODEV;
-	}
+	ret = spcom_unlock_ion_buf(ch, fd);
 
-	if (fd == (int) SPCOM_ION_FD_UNLOCK_ALL) {
-		/* unlock all ION buf */
-		for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
-			if (ch->ion_handle_table[i] != NULL) {
-				ion_free(ion_client, ch->ion_handle_table[i]);
-				ch->ion_handle_table[i] = NULL;
-				ch->ion_fd_table[i] = -1;
-				pr_debug("unlocked ion buf#[%d].\n", i);
-			}
-		}
-	} else {
-		/* unlock specific ION buf */
-		for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
-			if (ch->ion_fd_table[i] == fd) {
-				ion_free(ion_client, ch->ion_handle_table[i]);
-				ch->ion_handle_table[i] = NULL;
-				ch->ion_fd_table[i] = -1;
-				pr_debug("unlocked ion buf#[%d].\n", i);
-				break;
-			}
-		}
-	}
-
-	return 0;
+	return ret;
 }
 
 /**
@@ -1880,8 +2026,8 @@ static int spcom_handle_read(struct spcom_channel *ch,
 {
 	if (size == SPCOM_GET_NEXT_REQUEST_SIZE) {
 		pr_debug("get next request size, ch [%s].\n", ch->name);
-		size = spcom_handle_get_req_size(ch, buf, size);
 		ch->is_server = true;
+		size = spcom_handle_get_req_size(ch, buf, size);
 	} else {
 		pr_debug("get request/response, ch [%s].\n", ch->name);
 		size = spcom_handle_read_req_resp(ch, buf, size);
@@ -2277,7 +2423,7 @@ static int spcom_create_channel_chardev(const char *name)
 	devt = spcom_dev->device_no + spcom_dev->channel_count;
 	priv = ch;
 	dev = device_create(cls, parent, devt, priv, name);
-	if (!dev) {
+	if (IS_ERR(dev)) {
 		pr_err("device_create failed.\n");
 		kfree(cdev);
 		return -ENODEV;
@@ -2330,7 +2476,7 @@ static int __init spcom_register_chardev(void)
 				  spcom_dev->device_no, priv,
 				  DEVICE_NAME);
 
-	if (!spcom_dev->class_dev) {
+	if (IS_ERR(spcom_dev->class_dev)) {
 		pr_err("class_device_create failed %d\n", ret);
 		ret = -ENOMEM;
 		goto exit_destroy_class;
@@ -2382,6 +2528,11 @@ static int spcom_parse_dt(struct device_node *np)
 	const char *name;
 
 	pr_debug("num of predefined channels [%d].\n", num_ch);
+
+	if (num_ch > ARRAY_SIZE(spcom_dev->predefined_ch_name)) {
+		pr_err("too many predefined channels [%d].\n", num_ch);
+		return -EINVAL;
+	}
 
 	for (i = 0; i < num_ch; i++) {
 		ret = of_property_read_string_index(np, propname, i, &name);
@@ -2448,21 +2599,23 @@ static int spcom_probe(struct platform_device *pdev)
 	pr_debug("register_link_state_cb(), transport [%s] edge [%s]\n",
 		link_info.transport, link_info.edge);
 	notif_handle = glink_register_link_state_cb(&link_info, spcom_dev);
-	if (!notif_handle) {
+	if (IS_ERR(notif_handle)) {
 		pr_err("glink_register_link_state_cb(), err [%d]\n", ret);
 		goto fail_reg_chardev;
 	}
 
 	spcom_dev->ion_client = msm_ion_client_create(DEVICE_NAME);
-	if (spcom_dev->ion_client == NULL) {
+	if (IS_ERR(spcom_dev->ion_client)) {
 		pr_err("fail to create ion client.\n");
-		goto fail_reg_chardev;
+		goto fail_ion_client;
 	}
 
 	pr_info("Driver Initialization ok.\n");
 
 	return 0;
 
+fail_ion_client:
+	glink_unregister_link_state_cb(notif_handle);
 fail_reg_chardev:
 	pr_err("Failed to init driver.\n");
 	spcom_unregister_chrdev();
@@ -2500,7 +2653,7 @@ static int __init spcom_init(void)
 	if (ret)
 		pr_err("spcom_driver register failed %d\n", ret);
 
-	return 0;
+	return ret;
 }
 module_init(spcom_init);
 

@@ -261,4 +261,7 @@ int get_switch_sel(void);
 int get_afc_mode(void);
 void muic_set_hmt_status(int status);
 extern void muic_send_dock_intent(int type);
+#if defined(CONFIG_SEC_FACTORY)
+extern void muic_send_attached_muic_cable_intent(int type);
+#endif
 #endif /* __MUIC_H__ */

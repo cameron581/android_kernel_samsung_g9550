@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -64,6 +64,13 @@ struct diag_glink_info glink_data[NUM_PERIPHERALS] = {
 		.edge = "wdsp",
 		.name = "DIAG_DATA",
 		.hdl = NULL
+	},
+	{
+		.peripheral = PERIPHERAL_CDSP,
+		.type = TYPE_DATA,
+		.edge = "cdsp",
+		.name = "DIAG_DATA",
+		.hdl = NULL
 	}
 };
 
@@ -100,6 +107,13 @@ struct diag_glink_info glink_cntl[NUM_PERIPHERALS] = {
 		.peripheral = PERIPHERAL_WDSP,
 		.type = TYPE_CNTL,
 		.edge = "wdsp",
+		.name = "DIAG_CTRL",
+		.hdl = NULL
+	},
+	{
+		.peripheral = PERIPHERAL_CDSP,
+		.type = TYPE_CNTL,
+		.edge = "cdsp",
 		.name = "DIAG_CTRL",
 		.hdl = NULL
 	}
@@ -140,6 +154,13 @@ struct diag_glink_info glink_dci[NUM_PERIPHERALS] = {
 		.edge = "wdsp",
 		.name = "DIAG_DCI_DATA",
 		.hdl = NULL
+	},
+	{
+		.peripheral = PERIPHERAL_CDSP,
+		.type = TYPE_DCI,
+		.edge = "cdsp",
+		.name = "DIAG_DCI_DATA",
+		.hdl = NULL
 	}
 };
 
@@ -178,6 +199,13 @@ struct diag_glink_info glink_cmd[NUM_PERIPHERALS] = {
 		.edge = "wdsp",
 		.name = "DIAG_CMD",
 		.hdl = NULL
+	},
+	{
+		.peripheral = PERIPHERAL_CDSP,
+		.type = TYPE_CMD,
+		.edge = "cdsp",
+		.name = "DIAG_CMD",
+		.hdl = NULL
 	}
 };
 
@@ -214,6 +242,13 @@ struct diag_glink_info glink_dci_cmd[NUM_PERIPHERALS] = {
 		.peripheral = PERIPHERAL_WDSP,
 		.type = TYPE_DCI_CMD,
 		.edge = "wdsp",
+		.name = "DIAG_DCI_CMD",
+		.hdl = NULL
+	},
+	{
+		.peripheral = PERIPHERAL_CDSP,
+		.type = TYPE_DCI_CMD,
+		.edge = "cdsp",
 		.name = "DIAG_DCI_CMD",
 		.hdl = NULL
 	}
@@ -433,7 +468,7 @@ static void diag_glink_connect_work_fn(struct work_struct *work)
 	struct diag_glink_info *glink_info = container_of(work,
 							struct diag_glink_info,
 							connect_work);
-	if (!glink_info || glink_info->hdl)
+	if (!glink_info || !glink_info->hdl)
 		return;
 	atomic_set(&glink_info->opened, 1);
 	diagfwd_channel_open(glink_info->fwd_ctxt);
@@ -445,7 +480,7 @@ static void diag_glink_remote_disconnect_work_fn(struct work_struct *work)
 	struct diag_glink_info *glink_info = container_of(work,
 							struct diag_glink_info,
 							remote_disconnect_work);
-	if (!glink_info || glink_info->hdl)
+	if (!glink_info || !glink_info->hdl)
 		return;
 	atomic_set(&glink_info->opened, 0);
 	diagfwd_channel_close(glink_info->fwd_ctxt);

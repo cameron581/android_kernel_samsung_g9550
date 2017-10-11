@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -215,7 +215,7 @@ static void send_ind_ack(struct work_struct *work)
 	if (QMI_RESP_BIT_SHIFT(resp.resp.result) != QMI_RESULT_SUCCESS_V01)
 		pr_err("QMI request failed 0x%x\n",
 			QMI_RESP_BIT_SHIFT(resp.resp.error));
-	pr_debug("Indication ACKed for transid %d, service %s, instance %d!\n",
+	pr_info("Indication ACKed for transid %d, service %s, instance %d!\n",
 		data->ind_msg.transaction_id, data->ind_msg.service_path,
 		data->instance_id);
 }
@@ -229,6 +229,7 @@ static void root_service_service_ind_cb(struct qmi_handle *handle,
 	struct msg_desc ind_desc;
 	struct qmi_servreg_notif_state_updated_ind_msg_v01 ind_msg = {
 					QMI_STATE_MIN_VAL, "", 0xFFFF };
+	enum pd_subsys_state state = USER_PD_STATE_CHANGE;
 	int rc;
 
 	ind_desc.msg_id = SERVREG_NOTIF_STATE_UPDATED_IND_MSG;
@@ -240,7 +241,7 @@ static void root_service_service_ind_cb(struct qmi_handle *handle,
 		return;
 	}
 
-	pr_debug("Indication received from %s, state: 0x%x, trans-id: %d\n",
+	pr_info("Indication received from %s, state: 0x%x, trans-id: %d\n",
 		ind_msg.service_name, ind_msg.curr_state,
 		ind_msg.transaction_id);
 
@@ -256,7 +257,7 @@ static void root_service_service_ind_cb(struct qmi_handle *handle,
 		mutex_lock(&notif_add_lock);
 		mutex_lock(&service_list_lock);
 		rc = service_notif_queue_notification(service_notif,
-						ind_msg.curr_state, NULL);
+					ind_msg.curr_state, &state);
 		if (rc & NOTIFY_STOP_MASK)
 			pr_err("Notifier callback aborted for %s with error %d\n",
 						ind_msg.service_name, rc);
@@ -336,11 +337,13 @@ static void root_service_service_arrive(struct work_struct *work)
 	int rc;
 	int curr_state;
 
+	mutex_lock(&qmi_client_release_lock);
 	/* Create a Local client port for QMI communication */
 	data->clnt_handle = qmi_handle_create(root_service_clnt_notify, work);
 	if (!data->clnt_handle) {
 		pr_err("QMI client handle alloc failed (instance-id: %d)\n",
 							data->instance_id);
+		mutex_unlock(&qmi_client_release_lock);
 		return;
 	}
 
@@ -353,9 +356,11 @@ static void root_service_service_arrive(struct work_struct *work)
 							data->instance_id, rc);
 		qmi_handle_destroy(data->clnt_handle);
 		data->clnt_handle = NULL;
+		mutex_unlock(&qmi_client_release_lock);
 		return;
 	}
 	data->service_connected = true;
+	mutex_unlock(&qmi_client_release_lock);
 	pr_info("Connection established between QMI handle and %d service\n",
 							data->instance_id);
 	/* Register for indication messages about service */
@@ -369,6 +374,7 @@ static void root_service_service_arrive(struct work_struct *work)
 	mutex_lock(&service_list_lock);
 	list_for_each_entry(service_notif, &service_list, list) {
 		if (service_notif->instance_id == data->instance_id) {
+			enum pd_subsys_state state = ROOT_PD_UP;
 			rc = register_notif_listener(service_notif, data,
 								&curr_state);
 			if (rc) {
@@ -376,7 +382,7 @@ static void root_service_service_arrive(struct work_struct *work)
 					service_notif->service_path, rc);
 			} else {
 				rc = service_notif_queue_notification(
-					service_notif, curr_state, NULL);
+					service_notif, curr_state, &state);
 				if (rc & NOTIFY_STOP_MASK)
 					pr_err("Notifier callback aborted for %s error:%d\n",
 					service_notif->service_path, rc);
@@ -430,7 +436,7 @@ static void root_service_exit_work(struct work_struct *work)
 {
 	struct qmi_client_info *data = container_of(work,
 					struct qmi_client_info, svc_exit);
-	root_service_service_exit(data, UNKNOWN);
+	root_service_service_exit(data, ROOT_PD_DOWN);
 }
 
 static int service_event_notify(struct notifier_block *this,
@@ -462,14 +468,24 @@ static int ssr_event_notify(struct notifier_block *this,
 	struct qmi_client_info *info = container_of(this,
 					struct qmi_client_info, ssr_notifier);
 	struct notif_data *notif = data;
+	enum pd_subsys_state state;
+
 	switch (code) {
 	case	SUBSYS_BEFORE_SHUTDOWN:
-		pr_debug("Root PD DOWN(SSR notification), crashed?%d\n",
+		pr_debug("Root PD DOWN(SSR notification), state:%d\n",
 						notif->crashed);
-		if (notif->crashed)
-			root_service_service_exit(info, CRASHED);
-		else
-			root_service_service_exit(info, SHUTDOWN);
+		switch (notif->crashed) {
+		case CRASH_STATUS_ERR_FATAL:
+			state = ROOT_PD_ERR_FATAL;
+			break;
+		case CRASH_STATUS_WDOG_BITE:
+			state = ROOT_PD_WDOG_BITE;
+			break;
+		default:
+			state = ROOT_PD_SHUTDOWN;
+			break;
+		}
+		root_service_service_exit(info, state);
 		break;
 	default:
 		break;
@@ -587,6 +603,75 @@ exit:
 	kfree(service_notif);
 	return ERR_PTR(rc);
 }
+
+static int send_pd_restart_req(const char *service_path,
+				struct qmi_client_info *data)
+{
+	struct qmi_servreg_notif_restart_pd_req_msg_v01 req;
+	struct qmi_servreg_notif_register_listener_resp_msg_v01
+						resp = { { 0, 0 } };
+	struct msg_desc req_desc, resp_desc;
+	int rc;
+
+	snprintf(req.service_name, ARRAY_SIZE(req.service_name), "%s",
+							service_path);
+
+	req_desc.msg_id = QMI_SERVREG_NOTIF_RESTART_PD_REQ_V01;
+	req_desc.max_msg_len =
+		QMI_SERVREG_NOTIF_RESTART_PD_REQ_MSG_V01_MAX_MSG_LEN;
+	req_desc.ei_array = qmi_servreg_notif_restart_pd_req_msg_v01_ei;
+
+	resp_desc.msg_id = QMI_SERVREG_NOTIF_RESTART_PD_RESP_V01;
+	resp_desc.max_msg_len =
+		QMI_SERVREG_NOTIF_RESTART_PD_RESP_MSG_V01_MAX_MSG_LEN;
+	resp_desc.ei_array = qmi_servreg_notif_restart_pd_resp_msg_v01_ei;
+
+	rc = qmi_send_req_wait(data->clnt_handle, &req_desc, &req,
+			sizeof(req), &resp_desc, &resp, sizeof(resp),
+			SERVER_TIMEOUT);
+	if (rc < 0) {
+		pr_err("%s: Message sending failed/server timeout, ret - %d\n",
+							service_path, rc);
+		return rc;
+	}
+
+	/* Check the response */
+	if (QMI_RESP_BIT_SHIFT(resp.resp.result) != QMI_RESULT_SUCCESS_V01) {
+		pr_err("QMI request for PD restart failed 0x%x\n",
+					QMI_RESP_BIT_SHIFT(resp.resp.error));
+		return -EREMOTEIO;
+	}
+
+	return rc;
+
+}
+
+/* service_notif_pd_restart() - Request PD restart
+ * @service_path: Individual service identifier path for which restart is
+ *		being requested.
+ * @instance_id: Instance id specific to a subsystem.
+ *
+ * @return: >=0 on success, standard Linux error codes on failure.
+ */
+int service_notif_pd_restart(const char *service_path, int instance_id)
+{
+	struct qmi_client_info *tmp;
+	int rc = 0;
+
+	list_for_each_entry(tmp, &qmi_client_list, list) {
+		if (tmp->instance_id == instance_id) {
+			if (tmp->service_connected) {
+				pr_info("Restarting service %s, instance-id %d\n",
+						service_path, instance_id);
+				rc = send_pd_restart_req(service_path, tmp);
+			} else
+				pr_info("Service %s is not connected\n",
+							service_path);
+		}
+	}
+	return rc;
+}
+EXPORT_SYMBOL(service_notif_pd_restart);
 
 /* service_notif_register_notifier() - Register a notifier for a service
  * On success, it returns back a handle. It takes the following arguments:

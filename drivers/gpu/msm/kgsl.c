@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -265,9 +265,12 @@ kgsl_mem_entry_create(void)
 {
 	struct kgsl_mem_entry *entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 
-	if (entry != NULL)
+	if (entry != NULL) {
 		kref_init(&entry->refcount);
 
+		/* put this ref in the caller functions after init */
+		kref_get(&entry->refcount);
+	}
 	return entry;
 }
 #ifdef CONFIG_DMA_SHARED_BUFFER
@@ -1444,6 +1447,17 @@ long kgsl_ioctl_device_waittimestamp_ctxtid(
 	return result;
 }
 
+static inline bool _check_context_is_sparse(struct kgsl_context *context,
+			uint64_t flags)
+{
+	if ((context->flags & KGSL_CONTEXT_SPARSE) ||
+		(flags & KGSL_DRAWOBJ_SPARSE))
+		return true;
+
+	return false;
+}
+
+
 long kgsl_ioctl_rb_issueibcmds(struct kgsl_device_private *dev_priv,
 				      unsigned int cmd, void *data)
 {
@@ -1467,6 +1481,11 @@ long kgsl_ioctl_rb_issueibcmds(struct kgsl_device_private *dev_priv,
 	context = kgsl_context_get_owner(dev_priv, param->drawctxt_id);
 	if (context == NULL)
 		return -EINVAL;
+
+	if (_check_context_is_sparse(context, param->flags)) {
+		kgsl_context_put(context);
+		return -EINVAL;
+	}
 
 	cmdobj = kgsl_drawobj_cmd_create(device, context, param->flags,
 					CMDOBJ_TYPE);
@@ -1563,6 +1582,11 @@ long kgsl_ioctl_submit_commands(struct kgsl_device_private *dev_priv,
 	if (context == NULL)
 		return -EINVAL;
 
+	if (_check_context_is_sparse(context, param->flags)) {
+		kgsl_context_put(context);
+		return -EINVAL;
+	}
+
 	if (type & SYNCOBJ_TYPE) {
 		struct kgsl_drawobj_sync *syncobj =
 				kgsl_drawobj_sync_create(device, context);
@@ -1636,6 +1660,11 @@ long kgsl_ioctl_gpu_command(struct kgsl_device_private *dev_priv,
 	context = kgsl_context_get_owner(dev_priv, param->context_id);
 	if (context == NULL)
 		return -EINVAL;
+
+	if (_check_context_is_sparse(context, param->flags)) {
+		kgsl_context_put(context);
+		return -EINVAL;
+	}
 
 	if (type & SYNCOBJ_TYPE) {
 		struct kgsl_drawobj_sync *syncobj =
@@ -1743,9 +1772,9 @@ long kgsl_ioctl_drawctxt_create(struct kgsl_device_private *dev_priv,
 	/* Commit the pointer to the context in context_idr */
 	write_lock(&device->context_lock);
 	idr_replace(&device->context_idr, context, context->id);
+	param->drawctxt_id = context->id;
 	write_unlock(&device->context_lock);
 
-	param->drawctxt_id = context->id;
 done:
 	return result;
 }
@@ -2378,6 +2407,9 @@ long kgsl_ioctl_gpuobj_import(struct kgsl_device_private *dev_priv,
 	trace_kgsl_mem_map(entry, fd);
 
 	kgsl_mem_entry_commit_process(entry);
+
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
 	return 0;
 
 unmap:
@@ -2684,6 +2716,9 @@ long kgsl_ioctl_map_user_mem(struct kgsl_device_private *dev_priv,
 	trace_kgsl_mem_map(entry, param->fd);
 
 	kgsl_mem_entry_commit_process(entry);
+
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
 	return result;
 
 error_attach:
@@ -3122,6 +3157,9 @@ long kgsl_ioctl_gpuobj_alloc(struct kgsl_device_private *dev_priv,
 	param->mmapsize = kgsl_memdesc_footprint(&entry->memdesc);
 	param->id = entry->id;
 
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
+
 	return 0;
 }
 
@@ -3145,6 +3183,9 @@ long kgsl_ioctl_gpumem_alloc(struct kgsl_device_private *dev_priv,
 	param->size = (size_t) entry->memdesc.size;
 	param->flags = (unsigned int) entry->memdesc.flags;
 
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
+
 	return 0;
 }
 
@@ -3167,6 +3208,9 @@ long kgsl_ioctl_gpumem_alloc_id(struct kgsl_device_private *dev_priv,
 	param->size = (size_t) entry->memdesc.size;
 	param->mmapsize = (size_t) kgsl_memdesc_footprint(&entry->memdesc);
 	param->gpuaddr = (unsigned long) entry->memdesc.gpuaddr;
+
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
 
 	return 0;
 }
@@ -3285,6 +3329,9 @@ long kgsl_ioctl_sparse_phys_alloc(struct kgsl_device_private *dev_priv,
 	trace_sparse_phys_alloc(entry->id, param->size, param->pagesize);
 	kgsl_mem_entry_commit_process(entry);
 
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
+
 	return 0;
 
 err_invalid_pages:
@@ -3363,6 +3410,9 @@ long kgsl_ioctl_sparse_virt_alloc(struct kgsl_device_private *dev_priv,
 
 	trace_sparse_virt_alloc(entry->id, param->size, param->pagesize);
 	kgsl_mem_entry_commit_process(entry);
+
+	/* put the extra refcount for kgsl_mem_entry_create() */
+	kgsl_mem_entry_put(entry);
 
 	return 0;
 }
@@ -3596,6 +3646,9 @@ static inline bool _is_phys_bindable(struct kgsl_mem_entry *phys_entry,
 	if (!IS_ALIGNED(offset | size, kgsl_memdesc_get_pagesize(memdesc)))
 		return false;
 
+	if (offset + size < offset)
+		return false;
+
 	if (!(flags & KGSL_SPARSE_BIND_MULTIPLE_TO_PHYS) &&
 			offset + size > memdesc->size)
 		return false;
@@ -3723,7 +3776,7 @@ long kgsl_ioctl_sparse_bind(struct kgsl_device_private *dev_priv,
 			break;
 
 		/* Sanity check initial range */
-		if (obj.size == 0 ||
+		if (obj.size == 0 || obj.virtoffset + obj.size < obj.size ||
 			obj.virtoffset + obj.size > virt_entry->memdesc.size ||
 			!(IS_ALIGNED(obj.virtoffset | obj.size, pg_sz))) {
 			ret = -EINVAL;
@@ -3746,6 +3799,128 @@ long kgsl_ioctl_sparse_bind(struct kgsl_device_private *dev_priv,
 
 	return ret;
 }
+
+long kgsl_ioctl_gpu_sparse_command(struct kgsl_device_private *dev_priv,
+		unsigned int cmd, void *data)
+{
+	struct kgsl_gpu_sparse_command *param = data;
+	struct kgsl_device *device = dev_priv->device;
+	struct kgsl_context *context;
+	struct kgsl_drawobj *drawobj[2];
+	struct kgsl_drawobj_sparse *sparseobj;
+	long result;
+	unsigned int i = 0;
+
+	/* Make sure sparse and syncpoint count isn't too big */
+	if (param->numsparse > KGSL_MAX_SPARSE ||
+		param->numsyncs > KGSL_MAX_SYNCPOINTS)
+		return -EINVAL;
+
+	/* Make sure there is atleast one sparse or sync */
+	if (param->numsparse == 0 && param->numsyncs == 0)
+		return -EINVAL;
+
+	/* Only Sparse commands are supported in this ioctl */
+	if (!(param->flags & KGSL_DRAWOBJ_SPARSE) || (param->flags &
+			(KGSL_DRAWOBJ_SUBMIT_IB_LIST | KGSL_DRAWOBJ_MARKER
+			| KGSL_DRAWOBJ_SYNC)))
+		return -EINVAL;
+
+	context = kgsl_context_get_owner(dev_priv, param->context_id);
+	if (context == NULL)
+		return -EINVAL;
+
+	/* Restrict bind commands to bind context */
+	if (!(context->flags & KGSL_CONTEXT_SPARSE)) {
+		kgsl_context_put(context);
+		return -EINVAL;
+	}
+
+	if (param->numsyncs) {
+		struct kgsl_drawobj_sync *syncobj = kgsl_drawobj_sync_create(
+				device, context);
+		if (IS_ERR(syncobj)) {
+			result = PTR_ERR(syncobj);
+			goto done;
+		}
+
+		drawobj[i++] = DRAWOBJ(syncobj);
+		result = kgsl_drawobj_sync_add_synclist(device, syncobj,
+				to_user_ptr(param->synclist),
+				param->syncsize, param->numsyncs);
+		if (result)
+			goto done;
+	}
+
+	if (param->numsparse) {
+		sparseobj = kgsl_drawobj_sparse_create(device, context,
+					param->flags);
+		if (IS_ERR(sparseobj)) {
+			result = PTR_ERR(sparseobj);
+			goto done;
+		}
+
+		sparseobj->id = param->id;
+		drawobj[i++] = DRAWOBJ(sparseobj);
+		result = kgsl_drawobj_sparse_add_sparselist(device, sparseobj,
+				param->id, to_user_ptr(param->sparselist),
+				param->sparsesize, param->numsparse);
+		if (result)
+			goto done;
+	}
+
+	result = dev_priv->device->ftbl->queue_cmds(dev_priv, context,
+					drawobj, i, &param->timestamp);
+
+done:
+	/*
+	 * -EPROTO is a "success" error - it just tells the user that the
+	 * context had previously faulted
+	 */
+	if (result && result != -EPROTO)
+		while (i--)
+			kgsl_drawobj_destroy(drawobj[i]);
+
+	kgsl_context_put(context);
+	return result;
+}
+
+void kgsl_sparse_bind(struct kgsl_process_private *private,
+		struct kgsl_drawobj_sparse *sparseobj)
+{
+	struct kgsl_sparseobj_node *sparse_node;
+	struct kgsl_mem_entry *virt_entry = NULL;
+	long ret = 0;
+	char *name;
+
+	virt_entry = kgsl_sharedmem_find_id_flags(private, sparseobj->id,
+			KGSL_MEMFLAGS_SPARSE_VIRT);
+	if (virt_entry == NULL)
+		return;
+
+	list_for_each_entry(sparse_node, &sparseobj->sparselist, node) {
+		if (sparse_node->obj.flags & KGSL_SPARSE_BIND) {
+			ret = sparse_bind_range(private, &sparse_node->obj,
+					virt_entry);
+			name = "bind";
+		} else {
+			ret = sparse_unbind_range(&sparse_node->obj,
+					virt_entry);
+			name = "unbind";
+		}
+
+		if (ret)
+			KGSL_CORE_ERR("kgsl: Unable to '%s' ret %ld virt_id %d, phys_id %d, virt_offset %16.16llX, phys_offset %16.16llX, size %16.16llX, flags %16.16llX\n",
+				name, ret, sparse_node->virt_id,
+				sparse_node->obj.id,
+				sparse_node->obj.virtoffset,
+				sparse_node->obj.physoffset,
+				sparse_node->obj.size, sparse_node->obj.flags);
+	}
+
+	kgsl_mem_entry_put(virt_entry);
+}
+EXPORT_SYMBOL(kgsl_sparse_bind);
 
 long kgsl_ioctl_gpuobj_info(struct kgsl_device_private *dev_priv,
 		unsigned int cmd, void *data)
@@ -4239,8 +4414,9 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
 		 val = _get_svm_area(private, entry, addr, len, flags);
 		 if (IS_ERR_VALUE(val))
 			KGSL_MEM_ERR(device,
-				"_get_svm_area: pid %d addr %lx pgoff %lx len %ld failed error %d\n",
-				private->pid, addr, pgoff, len, (int) val);
+				"_get_svm_area: pid %d mmap_base %lx addr %lx pgoff %lx len %ld failed error %d\n",
+				private->pid, current->mm->mmap_base, addr,
+				pgoff, len, (int) val);
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 		if (IS_ERR_VALUE(val)) {
@@ -4554,6 +4730,7 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 		device->id, device->reg_phys, device->reg_len);
 
 	rwlock_init(&device->context_lock);
+	spin_lock_init(&device->submit_lock);
 
 	setup_timer(&device->idle_timer, kgsl_timer, (unsigned long) device);
 
@@ -4708,7 +4885,7 @@ static void kgsl_core_exit(void)
 		kgsl_driver.class = NULL;
 	}
 
-	kgsl_drawobj_exit();
+	kgsl_drawobjs_cache_exit();
 
 	kgsl_memfree_exit();
 	unregister_chrdev_region(kgsl_driver.major, KGSL_DEVICE_MAX);
@@ -4785,7 +4962,7 @@ static int __init kgsl_core_init(void)
 
 	kgsl_events_init();
 
-	result = kgsl_drawobj_init();
+	result = kgsl_drawobjs_cache_init();
 	if (result)
 		goto err;
 

@@ -66,6 +66,7 @@
 
 #define START_MQ                0x8000
 #define DUMP_MQ                 0x4000
+#define TH_SOC_INV              0x0A00
 
 #define CNTL_REG_DEFAULT_VALUE  0x2008
 #define INIT_CHECK_MASK         0x0010

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -95,7 +95,8 @@
 #define QMB_MASTER_SELECT_PCIE (1)
 
 #define IPA_CLIENT_NOT_USED \
-	{-1, -1, false, IPA_DPS_HPS_SEQ_TYPE_INVALID, QMB_MASTER_SELECT_DDR}
+	{IPA_EP_NOT_ALLOCATED, IPA_EP_NOT_ALLOCATED, false, \
+		IPA_DPS_HPS_SEQ_TYPE_INVALID, QMB_MASTER_SELECT_DDR}
 
 /* Resource Group index*/
 #define IPA_GROUP_UL		(0)
@@ -208,7 +209,12 @@ static const struct ipa_ep_configuration ipa3_ep_mapping
 	[IPA_3_0][IPA_CLIENT_A5_WLAN_AMPDU_PROD]  = IPA_CLIENT_NOT_USED,
 	[IPA_3_0][IPA_CLIENT_A2_EMBEDDED_PROD]    = IPA_CLIENT_NOT_USED,
 	[IPA_3_0][IPA_CLIENT_A2_TETHERED_PROD]    = IPA_CLIENT_NOT_USED,
-	[IPA_3_0][IPA_CLIENT_APPS_LAN_WAN_PROD]   = {14, IPA_GROUP_UL, true,
+	[IPA_3_0][IPA_CLIENT_APPS_LAN_PROD]
+			= {14, IPA_GROUP_DL, false,
+			IPA_DPS_HPS_SEQ_TYPE_PKT_PROCESS_NO_DEC_UCP,
+			QMB_MASTER_SELECT_DDR},
+	[IPA_3_0][IPA_CLIENT_APPS_WAN_PROD]
+			= {3, IPA_GROUP_UL, true,
 			IPA_DPS_HPS_SEQ_TYPE_2ND_PKT_PROCESS_PASS_NO_DEC_UCP,
 			QMB_MASTER_SELECT_DDR},
 	[IPA_3_0][IPA_CLIENT_APPS_CMD_PROD]
@@ -507,6 +513,10 @@ int ipa3_get_clients_from_rm_resource(
 	case IPA_RM_RESOURCE_MHI_CONS:
 		clients->names[i++] = IPA_CLIENT_MHI_CONS;
 		break;
+	case IPA_RM_RESOURCE_ODU_ADAPT_CONS:
+		clients->names[i++] = IPA_CLIENT_ODU_EMB_CONS;
+		clients->names[i++] = IPA_CLIENT_ODU_TETH_CONS;
+		break;
 	case IPA_RM_RESOURCE_USB_PROD:
 		clients->names[i++] = IPA_CLIENT_USB_PROD;
 		break;
@@ -516,6 +526,8 @@ int ipa3_get_clients_from_rm_resource(
 	case IPA_RM_RESOURCE_MHI_PROD:
 		clients->names[i++] = IPA_CLIENT_MHI_PROD;
 		break;
+	case IPA_RM_RESOURCE_ODU_ADAPT_PROD:
+		clients->names[i++] = IPA_CLIENT_ODU_PROD;
 	default:
 		break;
 	}
@@ -554,7 +566,9 @@ bool ipa3_should_pipe_be_suspended(enum ipa_client_type client)
 	    client == IPA_CLIENT_WLAN1_CONS   ||
 	    client == IPA_CLIENT_WLAN2_CONS   ||
 	    client == IPA_CLIENT_WLAN3_CONS   ||
-	    client == IPA_CLIENT_WLAN4_CONS)
+	    client == IPA_CLIENT_WLAN4_CONS   ||
+	    client == IPA_CLIENT_ODU_EMB_CONS ||
+	    client == IPA_CLIENT_ODU_TETH_CONS)
 		return true;
 
 	return false;
@@ -911,12 +925,18 @@ u8 ipa3_get_hw_type_index(void)
  */
 int ipa3_get_ep_mapping(enum ipa_client_type client)
 {
+	int ipa_ep_idx;
+
 	if (client >= IPA_CLIENT_MAX || client < 0) {
 		IPAERR("Bad client number! client =%d\n", client);
 		return -EINVAL;
 	}
 
-	return ipa3_ep_mapping[ipa3_get_hw_type_index()][client].pipe_num;
+	ipa_ep_idx = ipa3_ep_mapping[ipa3_get_hw_type_index()][client].pipe_num;
+	if (ipa_ep_idx < 0 || ipa_ep_idx >= IPA3_MAX_NUM_PIPES)
+		return IPA_EP_NOT_ALLOCATED;
+
+	return ipa_ep_idx;
 }
 
 /**
@@ -992,11 +1012,39 @@ void ipa3_set_client(int index, enum ipacm_client_enum client, bool uplink)
 	}
 }
 
+/* ipa3_get_wlan_stats() - get ipa wifi stats
+ *
+ * Return value: success or failure
+ */
+int ipa3_get_wlan_stats(struct ipa_get_wdi_sap_stats *wdi_sap_stats)
+{
+	if (ipa3_ctx->uc_wdi_ctx.stats_notify) {
+		ipa3_ctx->uc_wdi_ctx.stats_notify(IPA_GET_WDI_SAP_STATS,
+			wdi_sap_stats);
+	} else {
+		IPAERR("uc_wdi_ctx.stats_notify NULL\n");
+		return -EFAULT;
+	}
+	return 0;
+}
+
+int ipa3_set_wlan_quota(struct ipa_set_wifi_quota *wdi_quota)
+{
+	if (ipa3_ctx->uc_wdi_ctx.stats_notify) {
+		ipa3_ctx->uc_wdi_ctx.stats_notify(IPA_SET_WIFI_QUOTA,
+			wdi_quota);
+	} else {
+		IPAERR("uc_wdi_ctx.stats_notify NULL\n");
+		return -EFAULT;
+	}
+	return 0;
+}
+
 /**
  * ipa3_get_client() - provide client mapping
  * @client: client type
  *
- * Return value: none
+ * Return value: client mapping enum
  */
 enum ipacm_client_enum ipa3_get_client(int pipe_idx)
 {
@@ -2908,10 +2956,15 @@ bool ipa3_is_client_handle_valid(u32 clnt_hdl)
  */
 void ipa3_proxy_clk_unvote(void)
 {
-	if (ipa3_is_ready() && ipa3_ctx->q6_proxy_clk_vote_valid) {
+	if (!ipa3_is_ready())
+		return;
+
+	mutex_lock(&ipa3_ctx->q6_proxy_clk_vote_mutex);
+	if (ipa3_ctx->q6_proxy_clk_vote_valid) {
 		IPA_ACTIVE_CLIENTS_DEC_SPECIAL("PROXY_CLK_VOTE");
 		ipa3_ctx->q6_proxy_clk_vote_valid = false;
 	}
+	mutex_unlock(&ipa3_ctx->q6_proxy_clk_vote_mutex);
 }
 
 /**
@@ -2921,10 +2974,15 @@ void ipa3_proxy_clk_unvote(void)
  */
 void ipa3_proxy_clk_vote(void)
 {
-	if (ipa3_is_ready() && !ipa3_ctx->q6_proxy_clk_vote_valid) {
+	if (!ipa3_is_ready())
+		return;
+
+	mutex_lock(&ipa3_ctx->q6_proxy_clk_vote_mutex);
+	if (!ipa3_ctx->q6_proxy_clk_vote_valid) {
 		IPA_ACTIVE_CLIENTS_INC_SPECIAL("PROXY_CLK_VOTE");
 		ipa3_ctx->q6_proxy_clk_vote_valid = true;
 	}
+	mutex_unlock(&ipa3_ctx->q6_proxy_clk_vote_mutex);
 }
 
 /**
@@ -3114,6 +3172,8 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_suspend_wdi_pipe = ipa3_suspend_wdi_pipe;
 	api_ctrl->ipa_get_wdi_stats = ipa3_get_wdi_stats;
 	api_ctrl->ipa_get_smem_restr_bytes = ipa3_get_smem_restr_bytes;
+	api_ctrl->ipa_broadcast_wdi_quota_reach_ind =
+			ipa3_broadcast_wdi_quota_reach_ind;
 	api_ctrl->ipa_uc_wdi_get_dbpa = ipa3_uc_wdi_get_dbpa;
 	api_ctrl->ipa_uc_reg_rdyCB = ipa3_uc_reg_rdyCB;
 	api_ctrl->ipa_uc_dereg_rdyCB = ipa3_uc_dereg_rdyCB;
@@ -3380,6 +3440,7 @@ static void ipa3_gsi_poll_after_suspend(struct ipa3_ep_context *ep)
 		/* queue a work to start polling if don't have one */
 		atomic_set(&ipa3_ctx->transport_pm.eot_activity, 1);
 		if (!atomic_read(&ep->sys->curr_polling_state)) {
+			ipa3_inc_acquire_wakelock();
 			atomic_set(&ep->sys->curr_polling_state, 1);
 			queue_work(ep->sys->wq, &ep->sys->work);
 		}
@@ -3511,18 +3572,24 @@ int ipa3_stop_gsi_channel(u32 clnt_hdl)
 	memset(&mem, 0, sizeof(mem));
 
 	if (IPA_CLIENT_IS_PROD(ep->client)) {
+		IPADBG("Calling gsi_stop_channel ch:%lu\n",
+			ep->gsi_chan_hdl);
 		res = gsi_stop_channel(ep->gsi_chan_hdl);
+		IPADBG("gsi_stop_channel ch: %lu returned %d\n",
+			ep->gsi_chan_hdl, res);
 		goto end_sequence;
 	}
 
 	for (i = 0; i < IPA_GSI_CHANNEL_STOP_MAX_RETRY; i++) {
-		IPADBG("Calling gsi_stop_channel\n");
+		IPADBG("Calling gsi_stop_channel ch:%lu\n",
+			ep->gsi_chan_hdl);
 		res = gsi_stop_channel(ep->gsi_chan_hdl);
-		IPADBG("gsi_stop_channel returned %d\n", res);
+		IPADBG("gsi_stop_channel ch: %lu returned %d\n",
+			ep->gsi_chan_hdl, res);
 		if (res != -GSI_STATUS_AGAIN && res != -GSI_STATUS_TIMED_OUT)
 			goto end_sequence;
 
-		IPADBG("Inject a DMA_TASK with 1B packet to IPA and retry\n");
+		IPADBG("Inject a DMA_TASK with 1B packet to IPA\n");
 		/* Send a 1B packet DMA_TASK to IPA and try again */
 		res = ipa3_inject_dma_task_for_gsi();
 		if (res) {
@@ -3543,75 +3610,164 @@ end_sequence:
 	return res;
 }
 
+static int ipa3_load_single_fw(const struct firmware *firmware,
+	const struct elf32_phdr *phdr)
+{
+	uint32_t *fw_mem_base;
+	int index;
+	const uint32_t *elf_data_ptr;
+
+	if (phdr->p_offset > firmware->size) {
+		IPAERR("Invalid ELF: offset=%u is beyond elf_size=%zu\n",
+			phdr->p_offset, firmware->size);
+		return -EINVAL;
+	}
+	if ((firmware->size - phdr->p_offset) < phdr->p_filesz) {
+		IPAERR("Invalid ELF: offset=%u filesz=%u elf_size=%zu\n",
+			phdr->p_offset, phdr->p_filesz, firmware->size);
+		return -EINVAL;
+	}
+
+	if (phdr->p_memsz % sizeof(uint32_t)) {
+		IPAERR("FW mem size %u doesn't align to 32bit\n",
+			phdr->p_memsz);
+		return -EFAULT;
+	}
+
+	if (phdr->p_filesz > phdr->p_memsz) {
+		IPAERR("FW image too big src_size=%u dst_size=%u\n",
+			phdr->p_filesz, phdr->p_memsz);
+		return -EFAULT;
+	}
+
+	fw_mem_base = ioremap(phdr->p_vaddr, phdr->p_memsz);
+	if (!fw_mem_base) {
+		IPAERR("Failed to map 0x%x for the size of %u\n",
+			phdr->p_vaddr, phdr->p_memsz);
+		return -ENOMEM;
+	}
+
+	/* Set the entire region to 0s */
+	memset(fw_mem_base, 0, phdr->p_memsz);
+
+	elf_data_ptr = (uint32_t *)(firmware->data + phdr->p_offset);
+
+	/* Write the FW */
+	for (index = 0; index < phdr->p_filesz/sizeof(uint32_t); index++) {
+		writel_relaxed(*elf_data_ptr, &fw_mem_base[index]);
+		elf_data_ptr++;
+	}
+
+	iounmap(fw_mem_base);
+
+	return 0;
+}
+
 /**
  * ipa3_load_fws() - Load the IPAv3 FWs into IPA&GSI SRAM.
  *
  * @firmware: Structure which contains the FW data from the user space.
+ * @gsi_mem_base: GSI base address
  *
  * Return value: 0 on success, negative otherwise
  *
  */
-int ipa3_load_fws(const struct firmware *firmware)
+int ipa3_load_fws(const struct firmware *firmware, phys_addr_t gsi_mem_base)
 {
 	const struct elf32_hdr *ehdr;
 	const struct elf32_phdr *phdr;
-	const uint8_t *elf_phdr_ptr;
-	uint32_t *elf_data_ptr;
-	int phdr_idx, index;
-	uint32_t *fw_mem_base;
+	unsigned long gsi_iram_ofst;
+	unsigned long gsi_iram_size;
+	phys_addr_t ipa_reg_mem_base;
+	u32 ipa_reg_ofst;
+	int rc;
+
+	if (!gsi_mem_base) {
+		IPAERR("Invalid GSI base address\n");
+		return -EINVAL;
+	}
+
+	ipa_assert_on(!firmware);
+	/* One program header per FW image: GSI, DPS and HPS */
+	if (firmware->size < (sizeof(*ehdr) + 3 * sizeof(*phdr))) {
+		IPAERR("Missing ELF and Program headers firmware size=%zu\n",
+			firmware->size);
+		return -EINVAL;
+	}
 
 	ehdr = (struct elf32_hdr *) firmware->data;
-
-	elf_phdr_ptr = firmware->data + sizeof(*ehdr);
-
-	for (phdr_idx = 0; phdr_idx < ehdr->e_phnum; phdr_idx++) {
-		/*
-		 * The ELF program header will contain the starting
-		 * address to which the firmware needs to copied.
-		 */
-		phdr = (struct elf32_phdr *)elf_phdr_ptr;
-
-		/*
-		 * p_vaddr will contain the starting address to which the
-		 * FW needs to be loaded.
-		 * p_memsz will contain the size of the IRAM.
-		 * p_filesz will contain the size of the FW image.
-		 */
-		fw_mem_base = ioremap(phdr->p_vaddr, phdr->p_memsz);
-		if (!fw_mem_base) {
-			IPAERR("Failed to map 0x%x for the size of %u\n",
-				phdr->p_vaddr, phdr->p_memsz);
-				return -ENOMEM;
-		}
-
-		/* Set the entire region to 0s */
-		memset(fw_mem_base, 0, phdr->p_memsz);
-
-		/*
-		 * p_offset will contain and absolute offset from the beginning
-		 * of the ELF file.
-		 */
-		elf_data_ptr = (uint32_t *)
-				((uint8_t *)firmware->data + phdr->p_offset);
-
-		if (phdr->p_memsz % sizeof(uint32_t)) {
-			IPAERR("FW size %u doesn't align to 32bit\n",
-				phdr->p_memsz);
-			return -EFAULT;
-		}
-
-		/* Write the FW */
-		for (index = 0; index < phdr->p_filesz/sizeof(uint32_t);
-			index++) {
-			writel_relaxed(*elf_data_ptr, &fw_mem_base[index]);
-			elf_data_ptr++;
-		}
-
-		iounmap(fw_mem_base);
-
-		elf_phdr_ptr = elf_phdr_ptr + sizeof(*phdr);
+	ipa_assert_on(!ehdr);
+	if (ehdr->e_phnum != 3) {
+		IPAERR("Unexpected number of ELF program headers\n");
+		return -EINVAL;
 	}
-	IPADBG("IPA FWs (GSI FW, HPS and DPS) were loaded\n");
+	phdr = (struct elf32_phdr *)(firmware->data + sizeof(*ehdr));
+
+	/*
+	 * Each ELF program header represents a FW image and contains:
+	 *  p_vaddr : The starting address to which the FW needs to loaded.
+	 *  p_memsz : The size of the IRAM (where the image loaded)
+	 *  p_filesz: The size of the FW image embedded inside the ELF
+	 *  p_offset: Absolute offset to the image from the head of the ELF
+	 */
+
+	/* Load GSI FW image */
+	gsi_get_inst_ram_offset_and_size(&gsi_iram_ofst, &gsi_iram_size);
+	if (phdr->p_vaddr != (gsi_mem_base + gsi_iram_ofst)) {
+		IPAERR(
+			"Invalid GSI FW img load addr vaddr=0x%x gsi_mem_base=%pa gsi_iram_ofst=0x%lx\n"
+			, phdr->p_vaddr, &gsi_mem_base, gsi_iram_ofst);
+		return -EINVAL;
+	}
+	if (phdr->p_memsz > gsi_iram_size) {
+		IPAERR("Invalid GSI FW img size memsz=%d gsi_iram_size=%lu\n",
+			phdr->p_memsz, gsi_iram_size);
+		return -EINVAL;
+	}
+	rc = ipa3_load_single_fw(firmware, phdr);
+	if (rc)
+		return rc;
+
+	phdr++;
+	ipa_reg_mem_base = ipa3_ctx->ipa_wrapper_base + ipahal_get_reg_base();
+
+	/* Load IPA DPS FW image */
+	ipa_reg_ofst = ipahal_get_reg_ofst(IPA_DPS_SEQUENCER_FIRST);
+	if (phdr->p_vaddr != (ipa_reg_mem_base + ipa_reg_ofst)) {
+		IPAERR(
+			"Invalid IPA DPS img load addr vaddr=0x%x ipa_reg_mem_base=%pa ipa_reg_ofst=%u\n"
+			, phdr->p_vaddr, &ipa_reg_mem_base, ipa_reg_ofst);
+		return -EINVAL;
+	}
+	if (phdr->p_memsz > ipahal_get_dps_img_mem_size()) {
+		IPAERR("Invalid IPA DPS img size memsz=%d dps_mem_size=%u\n",
+			phdr->p_memsz, ipahal_get_dps_img_mem_size());
+		return -EINVAL;
+	}
+	rc = ipa3_load_single_fw(firmware, phdr);
+	if (rc)
+		return rc;
+
+	phdr++;
+
+	/* Load IPA HPS FW image */
+	ipa_reg_ofst = ipahal_get_reg_ofst(IPA_HPS_SEQUENCER_FIRST);
+	if (phdr->p_vaddr != (ipa_reg_mem_base + ipa_reg_ofst)) {
+		IPAERR(
+			"Invalid IPA HPS img load addr vaddr=0x%x ipa_reg_mem_base=%pa ipa_reg_ofst=%u\n"
+			, phdr->p_vaddr, &ipa_reg_mem_base, ipa_reg_ofst);
+		return -EINVAL;
+	}
+	if (phdr->p_memsz > ipahal_get_hps_img_mem_size()) {
+		IPAERR("Invalid IPA HPS img size memsz=%d dps_mem_size=%u\n",
+			phdr->p_memsz, ipahal_get_hps_img_mem_size());
+		return -EINVAL;
+	}
+	rc = ipa3_load_single_fw(firmware, phdr);
+	if (rc)
+		return rc;
+
+	IPADBG("IPA FWs (GSI FW, DPS and HPS) loaded successfully\n");
 	return 0;
 }
 

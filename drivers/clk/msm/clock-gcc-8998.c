@@ -241,6 +241,7 @@ DEFINE_EXT_CLK(gpll4_out_main, &gpll4.c);
 
 static struct clk_freq_tbl ftbl_usb30_master_clk_src[] = {
 	F(  19200000,    cxo_clk_src,    1,    0,     0),
+	F( 60000000, gpll0_out_main,    10,    0,     0),
 	F( 120000000, gpll0_out_main,    5,    0,     0),
 	F( 150000000, gpll0_out_main,    4,    0,     0),
 	F_END

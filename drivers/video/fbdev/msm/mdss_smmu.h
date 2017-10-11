@@ -1,4 +1,4 @@
-/* Copyright (c) 2007-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2007-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,6 +37,13 @@ struct mdss_smmu_domain {
 	int domain;
 	unsigned long start;
 	unsigned long size;
+};
+
+struct mdss_smmu_private {
+	struct device_node *pdev;
+	struct list_head smmu_device_list;
+	struct list_head user_list;
+	struct mutex smmu_reg_lock;
 };
 
 void mdss_smmu_register(struct device *dev);
@@ -135,13 +142,12 @@ static inline int mdss_smmu_get_domain_type(u64 flags, bool rotator)
 
 	if (flags & MDP_SECURE_OVERLAY_SESSION) {
 		type = (rotator &&
-			mdata->mdss_smmu[MDSS_IOMMU_DOMAIN_ROT_SECURE].dev) ?
-			MDSS_IOMMU_DOMAIN_ROT_SECURE : MDSS_IOMMU_DOMAIN_SECURE;
+		    mdata->mdss_smmu[MDSS_IOMMU_DOMAIN_ROT_SECURE].base.dev) ?
+		    MDSS_IOMMU_DOMAIN_ROT_SECURE : MDSS_IOMMU_DOMAIN_SECURE;
 	} else {
 		type = (rotator &&
-			mdata->mdss_smmu[MDSS_IOMMU_DOMAIN_ROT_UNSECURE].dev) ?
-			MDSS_IOMMU_DOMAIN_ROT_UNSECURE :
-			MDSS_IOMMU_DOMAIN_UNSECURE;
+		    mdata->mdss_smmu[MDSS_IOMMU_DOMAIN_ROT_UNSECURE].base.dev) ?
+		    MDSS_IOMMU_DOMAIN_ROT_UNSECURE : MDSS_IOMMU_DOMAIN_UNSECURE;
 	}
 	return type;
 }
@@ -150,18 +156,26 @@ static inline int mdss_smmu_attach(struct mdss_data_type *mdata)
 {
 	int rc;
 
+	mdata->mdss_util->iommu_lock();
 	MDSS_XLOG(mdata->iommu_attached);
+
 	if (mdata->iommu_attached) {
 		pr_debug("mdp iommu already attached\n");
-		return 0;
+		rc = 0;
+		goto end;
 	}
 
-	if (!mdata->smmu_ops.smmu_attach)
-		return -ENOSYS;
+	if (!mdata->smmu_ops.smmu_attach) {
+		rc = -ENODEV;
+		goto end;
+	}
 
 	rc =  mdata->smmu_ops.smmu_attach(mdata);
 	if (!rc)
 		mdata->iommu_attached = true;
+
+end:
+	mdata->mdss_util->iommu_unlock();
 	return rc;
 }
 
@@ -169,19 +183,26 @@ static inline int mdss_smmu_detach(struct mdss_data_type *mdata)
 {
 	int rc;
 
+	mdata->mdss_util->iommu_lock();
 	MDSS_XLOG(mdata->iommu_attached);
 
 	if (!mdata->iommu_attached) {
 		pr_debug("mdp iommu already dettached\n");
-		return 0;
+		rc = 0;
+		goto end;
 	}
 
-	if (!mdata->smmu_ops.smmu_detach)
-		return -ENOSYS;
+	if (!mdata->smmu_ops.smmu_detach) {
+		rc = -ENODEV;
+		goto end;
+	}
 
 	rc = mdata->smmu_ops.smmu_detach(mdata);
 	if (!rc)
 		mdata->iommu_attached = false;
+
+end:
+	mdata->mdss_util->iommu_unlock();
 	return rc;
 }
 
@@ -247,7 +268,7 @@ static inline void mdss_smmu_dma_free_coherent(struct device *dev, size_t size,
 		void *cpu_addr, dma_addr_t phys, dma_addr_t iova, int domain)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	if (mdata->smmu_ops.smmu_dma_free_coherent)
+	if (mdata && mdata->smmu_ops.smmu_dma_free_coherent)
 		mdata->smmu_ops.smmu_dma_free_coherent(dev, size, cpu_addr,
 			phys, iova, domain);
 }

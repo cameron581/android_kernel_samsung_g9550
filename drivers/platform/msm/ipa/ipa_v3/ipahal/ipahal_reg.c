@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,6 +44,7 @@ static const char *ipareg_name_to_str[IPA_REG_MAX] = {
 	__stringify(IPA_ENDP_INIT_MODE_n),
 	__stringify(IPA_ENDP_INIT_NAT_n),
 	__stringify(IPA_ENDP_INIT_CTRL_n),
+	__stringify(IPA_ENDP_INIT_CTRL_SCND_n),
 	__stringify(IPA_ENDP_INIT_HOL_BLOCK_EN_n),
 	__stringify(IPA_ENDP_INIT_HOL_BLOCK_TIMER_n),
 	__stringify(IPA_ENDP_INIT_DEAGGR_n),
@@ -645,6 +646,17 @@ static void ipareg_construct_endp_init_ctrl_n(enum ipahal_reg_name reg,
 		IPA_ENDP_INIT_CTRL_n_ENDP_DELAY_BMSK);
 }
 
+static void ipareg_construct_endp_init_ctrl_scnd_n(enum ipahal_reg_name reg,
+	const void *fields, u32 *val)
+{
+	struct ipahal_ep_cfg_ctrl_scnd *ep_ctrl_scnd =
+		(struct ipahal_ep_cfg_ctrl_scnd *)fields;
+
+	IPA_SETFIELD_IN_REG(*val, ep_ctrl_scnd->endp_delay,
+		IPA_ENDP_INIT_CTRL_SCND_n_ENDP_DELAY_SHFT,
+		IPA_ENDP_INIT_CTRL_SCND_n_ENDP_DELAY_BMSK);
+}
+
 static void ipareg_construct_endp_init_nat_n(enum ipahal_reg_name reg,
 		const void *fields, u32 *val)
 {
@@ -1008,6 +1020,9 @@ static struct ipahal_reg_obj ipahal_reg_objs[IPA_HW_MAX][IPA_REG_MAX] = {
 	[IPA_HW_v3_0][IPA_ENDP_INIT_CTRL_n] = {
 		ipareg_construct_endp_init_ctrl_n, ipareg_parse_dummy,
 		0x00000800, 0x70},
+	[IPA_HW_v3_0][IPA_ENDP_INIT_CTRL_SCND_n] = {
+		ipareg_construct_endp_init_ctrl_scnd_n, ipareg_parse_dummy,
+		0x00000804, 0x70 },
 	[IPA_HW_v3_0][IPA_ENDP_INIT_HOL_BLOCK_EN_n] = {
 		ipareg_construct_endp_init_hol_block_en_n,
 		ipareg_parse_dummy,
@@ -1119,6 +1134,12 @@ static struct ipahal_reg_obj ipahal_reg_objs[IPA_HW_MAX][IPA_REG_MAX] = {
 	[IPA_HW_v3_0][IPA_QSB_MAX_READS] = {
 		ipareg_construct_qsb_max_reads, ipareg_parse_dummy,
 		0x00000078, 0},
+	[IPA_HW_v3_0][IPA_DPS_SEQUENCER_FIRST] = {
+		ipareg_construct_dummy, ipareg_parse_dummy,
+		0x0001e000, 0},
+	[IPA_HW_v3_0][IPA_HPS_SEQUENCER_FIRST] = {
+		ipareg_construct_dummy, ipareg_parse_dummy,
+		0x0001e080, 0},
 
 
 	/* IPAv3.1 */
@@ -1282,6 +1303,38 @@ u32 ipahal_read_reg_n(enum ipahal_reg_name reg, u32 n)
 		WARN_ON(1);
 		return -EFAULT;
 	}
+	offset += ipahal_reg_objs[ipahal_ctx->hw_type][reg].n_ofst * n;
+	return ioread32(ipahal_ctx->base + offset);
+}
+
+/*
+ * ipahal_read_reg_mn() - Get mn parameterized reg value
+ */
+u32 ipahal_read_reg_mn(enum ipahal_reg_name reg, u32 m, u32 n)
+{
+	u32 offset;
+
+	if (reg >= IPA_REG_MAX) {
+		IPAHAL_ERR("Invalid register reg=%u\n", reg);
+		return -EFAULT;
+	}
+
+	IPAHAL_DBG_LOW("read %s m=%u n=%u\n",
+		ipahal_reg_name_str(reg), m, n);
+	offset = ipahal_reg_objs[ipahal_ctx->hw_type][reg].offset;
+	if (offset == -1) {
+		IPAHAL_ERR("Read access to obsolete reg=%s\n",
+			ipahal_reg_name_str(reg));
+		WARN_ON_ONCE(1);
+		return -EFAULT;
+	}
+	/*
+	 * Currently there is one register with m and n parameters
+	 *	IPA_UC_MAILBOX_m_n. The m value of it is 0x80.
+	 * If more such registers will be added in the future,
+	 *	we can move the m parameter to the table above.
+	 */
+	offset += 0x80 * m;
 	offset += ipahal_reg_objs[ipahal_ctx->hw_type][reg].n_ofst * n;
 	return ioread32(ipahal_ctx->base + offset);
 }

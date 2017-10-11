@@ -92,6 +92,7 @@ static const struct sm5720_irq_data sm5720_irqs[] = {
 	DECLARE_IRQ(SM5720_CHG_IRQ_INT2_DONE,               CHG_INT2,       1 << 6),
 	DECLARE_IRQ(SM5720_CHG_IRQ_INT2_WDTMROFF,           CHG_INT2,       1 << 7),
 
+	DECLARE_IRQ(SM5720_CHG_IRQ_INT3_OTGFAIL,	        CHG_INT3,       1 << 2),
 	DECLARE_IRQ(SM5720_CHG_IRQ_INT3_DISLIMIT,	        CHG_INT3,       1 << 3),
 	DECLARE_IRQ(SM5720_CHG_IRQ_INT3_PRETMROFF,	        CHG_INT3,       1 << 4),
 	DECLARE_IRQ(SM5720_CHG_IRQ_INT3_FASTTMROFF,	        CHG_INT3,       1 << 5),

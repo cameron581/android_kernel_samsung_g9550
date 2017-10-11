@@ -36,6 +36,8 @@ static void mdss_samsung_event_osc_te_fitting(struct mdss_panel_data *pdata, int
 static irqreturn_t samsung_te_check_handler(int irq, void *handle);
 static void samsung_te_check_done_work(struct work_struct *work);
 static void mdss_samsung_event_esd_recovery_init(struct mdss_panel_data *pdata, int event, void *arg);
+static void samsung_display_delay_disp_on_work(struct work_struct *work);
+
 
 struct samsung_display_driver_data vdd_data;
 
@@ -287,7 +289,7 @@ static void mdss_samsung_event_frame_update(struct mdss_panel_data *pdata, int e
 						vdd->hmt_stat.hmt_bright_update(ctrl);
 					}
 				}
-				LCD_INFO("DISPLAY_ON\n");
+				LCD_INFO("DISPLAY_ON:%d\n", ndx);
 				ATRACE_END(__func__);
 			}
 		} else
@@ -324,7 +326,7 @@ static void mdss_samsung_event_frame_update(struct mdss_panel_data *pdata, int e
 					vdd->hmt_stat.hmt_bright_update(ctrl);
 				}
 			}
-			LCD_INFO("DISPLAY_ON\n");
+			LCD_INFO("DISPLAY_ON:%d\n", ndx);
 			ATRACE_END(__func__);
 		}
 	}
@@ -347,6 +349,31 @@ static void mdss_samsung_send_esd_recovery_cmd( struct mdss_dsi_ctrl_pdata *ctrl
 	else
 		mdss_samsung_send_cmd(ctrl, TX_ESD_RECOVERY_2);
 	toggle = !toggle;
+}
+
+static int mdss_samsung_panel_recovery(struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	int rc = 0;
+
+	struct samsung_display_driver_data *vdd = samsung_get_vdd();
+	if (IS_ERR_OR_NULL(vdd)) {
+		pr_err("%s: Invalid data vdd : 0x%zx\n", __func__, (size_t)vdd);
+		return -EINVAL;
+	}
+
+	LCD_INFO("Panel Recovery, Trial Count = %d\n", vdd->panel_recovery_cnt);
+	SS_XLOG(vdd->panel_recovery_cnt);
+	inc_dpui_u32_field(DPUI_KEY_QCT_RCV_CNT, 1);
+
+	if (vdd->panel_recovery_cnt != MAX_PANEL_RECOVERY_TRIALS) {
+		mdss_fb_report_panel_dead(pstatus_data->mfd);
+		vdd->panel_recovery_cnt++;
+	} else {
+		mdss_samsung_store_xlog_panic_dbg();
+		panic("Panel Recovery Max");
+	}
+
+	return rc;
 }
 
 static void mdss_samsung_event_fb_event_callback(struct mdss_panel_data *pdata, int event, void *arg)
@@ -437,6 +464,9 @@ static int mdss_samsung_dsi_panel_event_handler(
 			if (vdd->send_esd_recovery)
 				mdss_samsung_send_esd_recovery_cmd(ctrl);
 			break;
+		case MDSS_SAMSUNG_EVENT_PANEL_RECOVERY:
+			mdss_samsung_panel_recovery(ctrl);
+			break;
 		case MDSS_SAMSUNG_EVENT_MULTI_RESOLUTION:
 			if (panel_func->samsung_multires)
 				panel_func->samsung_multires(vdd);
@@ -470,7 +500,7 @@ void mdss_samsung_panel_init(struct device_node *np,
 	mutex_init(&vdd_data.vdd_panel_lpm_lock);
 	/* To guarantee ALPM ON or OFF mode change operation*/
 	mutex_init(&vdd_data.vdd_act_clock_lock);
-	/* 
+	/*
 		To guarantee POC operation.
 		Any dsi tx or rx operation is not permitted while poc operation.
 	*/
@@ -500,7 +530,8 @@ void mdss_samsung_panel_init(struct device_node *np,
 	vdd_data.panel_func.mdss_samsung_event_esd_recovery_init =
 		mdss_samsung_event_esd_recovery_init;
 
-	vdd_data.manufacture_id_dsi[0] = PBA_ID;
+	for (loop = 0; loop < SUPPORT_PANEL_COUNT; loop++)
+		vdd_data.manufacture_id_dsi[loop] = PBA_ID;
 
 	mdss_samsung_panel_brightness_init(&vdd_data);
 
@@ -545,6 +576,7 @@ void mdss_samsung_panel_init(struct device_node *np,
 	/* Init Hall ic related things */
 	mutex_init(&vdd_data.vdd_hall_ic_lock); /* To guarantee HALL IC switching */
 	mutex_init(&vdd_data.vdd_hall_ic_blank_unblank_lock); /* To guarantee HALL IC operation(PMS BLANK & UNBLAMK) */
+	INIT_DELAYED_WORK(&vdd_data.delay_disp_on_work, samsung_display_delay_disp_on_work);
 
 	/* Init Other line panel support */
 	if (!IS_ERR_OR_NULL(vdd_data.panel_func.parsing_otherline_pdata) && mdss_panel_attached(DISPLAY_1) ) {
@@ -563,6 +595,11 @@ void mdss_samsung_panel_init(struct device_node *np,
 	       }
 	   	}
 	}
+
+	mutex_init(&vdd_data.exclusive_tx.ex_tx_lock);
+	mutex_init(&vdd_data.vdd_cpufreq_lock);
+	vdd_data.exclusive_tx.enable = 0;
+	init_waitqueue_head(&vdd_data.exclusive_tx.ex_tx_waitq);
 
 #if defined(CONFIG_SEC_FACTORY)
 	vdd_data.is_factory_mode = true;
@@ -861,13 +898,25 @@ static int samsung_nv_read(struct mdss_dsi_ctrl_pdata *ctrl, struct dsi_panel_cm
 			read_size = ((srcLength - read_pos + startoffset) < packet_size) ?
 			(srcLength - read_pos + startoffset) : packet_size;
 
+#if 0
 			mutex_lock(&vdd->vdd_mdss_direct_cmdlist_lock);
-			mdss_samsung_send_cmd(ctrl, TX_POC_REG_READ_POS);	
+			mdss_samsung_send_cmd(ctrl, TX_POC_REG_READ_POS);
 			mutex_lock(&vdd->vdd_lock);
 			read_count = mdss_samsung_panel_cmd_read(ctrl, cmds, read_size);
 			mutex_unlock(&vdd->vdd_lock);
 			mutex_unlock(&vdd->vdd_mdss_direct_cmdlist_lock);
+#else
+			/*
+				To reduce read time,
+				TX_POC_REG_READ_POS packet is combined to last index of samsung,poc_read_tx_cmds_revA.
+				It means TX_POC_REG_READ_POS packet is sent with single-transmission.
 
+				vdd_mdss_direct_cmdlist_lock is also held at ss_poc_read function.
+			*/
+			mutex_lock(&vdd->vdd_lock);
+			read_count = mdss_samsung_panel_cmd_read(ctrl, cmds, read_size);
+			mutex_unlock(&vdd->vdd_lock);
+#endif
 			for (i = 0; i < read_count; i++, show_cnt++) {
 				if (destBuffer != NULL && show_cnt < srcLength) {
 						destBuffer[show_cnt] =
@@ -921,7 +970,7 @@ static int samsung_nv_read(struct mdss_dsi_ctrl_pdata *ctrl, struct dsi_panel_cm
 				break;
 		}
 
-			LCD_ERR("mdss DSI%d %s\n", ndx, show_buffer);
+		LCD_ERR("mdss DSI%d %s\n", ndx, show_buffer);
 
 		return read_pos-startoffset;
 	}
@@ -1080,6 +1129,13 @@ int mdss_samsung_send_cmd(struct mdss_dsi_ctrl_pdata *ctrl, enum mipi_samsung_tx
 
 	pcmds = mdss_samsung_cmds_select(ctrl, cmd, &flags);
 
+	if (unlikely(vdd->exclusive_tx.enable && !pcmds->exclusive_pass)) {
+		LCD_INFO("wait.. cmd=%d\n", cmd);
+		wait_event(vdd_data.exclusive_tx.ex_tx_waitq,
+				!vdd->exclusive_tx.enable);
+		LCD_INFO("pass, cmd=%d\n", cmd);
+	}
+
 	/*
 		Any dsi TX or RX operation is not permitted while poc operation.
 		1. Whole POC related cmds use CMD_REQ_DMA_TPG.
@@ -1133,9 +1189,230 @@ int mdss_samsung_send_cmd(struct mdss_dsi_ctrl_pdata *ctrl, enum mipi_samsung_tx
 	return 0;
 }
 
+#include <linux/cpufreq.h>
+#define CPUFREQ_MAX	100
+#define CPUFREQ_ALT_HIGH	70
+struct cluster_cpu_info {
+	int cpu_man; /* cpu number that manages the policy */
+	int max_freq;
+};
+
+static void __mdss_samsung_set_cpufreq_cpu(struct samsung_display_driver_data *vdd,
+				int enable, int cpu, int max_percent)
+{
+	struct cpufreq_policy *policy;
+	static unsigned int org_min[NR_CPUS + 1];
+	static unsigned int org_max[NR_CPUS + 1];
+
+	policy = cpufreq_cpu_get(cpu);
+	if (enable) {
+		org_min[cpu] = policy->min;
+		org_max[cpu] = policy->max;
+
+		/* max_freq's unit is kHz, and it should not cause overflow.
+		 * After applying user_policy, cpufreq driver will find closest
+		 * frequency in freq_table, and set the frequency.
+		 */
+		policy->user_policy.min = policy->user_policy.max =
+			policy->cpuinfo.max_freq * max_percent / 100;
+	} else {
+		policy->user_policy.min = org_min[cpu];
+		policy->user_policy.max = org_max[cpu];
+	}
+
+	cpufreq_update_policy(cpu);
+	cpufreq_cpu_put(policy);
+
+	LCD_INFO("en=%d, cpu=%d, per=%d, min=%d, org=(%d-%d)\n",
+			enable, cpu, max_percent, policy->user_policy.min,
+			org_min[cpu], org_max[cpu]);
+}
+
+void mdss_samsung_set_max_cpufreq(struct samsung_display_driver_data *vdd,
+				int enable, enum mdss_cpufreq_cluster cluster)
+{
+	struct cpufreq_policy *policy;
+	int cpu;
+	struct cluster_cpu_info cluster_info[NR_CPUS];
+	int cnt_cluster;
+	int big_cpu_man;
+	int little_cpu_man;
+
+	LCD_INFO("en=%d, cluster=%d\n", enable, cluster);
+	mutex_lock(&vdd->vdd_cpufreq_lock);
+	get_online_cpus();
+
+	/* find clusters */
+	cnt_cluster = 0;
+	for_each_online_cpu(cpu) {
+		policy = cpufreq_cpu_get(cpu);
+		/* In big-little octa core system,
+		 * cpu0 ~ cpu3 has same policy (policy0) and
+		 * policy->cpu would be 0. (cpu0 manages policy0)
+		 * cpu4 ~ cpu7 has same policy (policy4) and
+		 * policy->cpu would be 4. (cpu4 manages policy0)
+		 * In this case, cnt_cluster would be two, and
+		 * cluster_info[0].cpu_man = 0, cluster_info[1].cpu_man = 4.
+		 */
+		if (policy && policy->cpu == cpu) {
+			cluster_info[cnt_cluster].cpu_man = cpu;
+			cluster_info[cnt_cluster].max_freq =
+				policy->cpuinfo.max_freq;
+			cnt_cluster++;
+		}
+		cpufreq_cpu_put(policy);
+	}
+
+	if (!cnt_cluster || cnt_cluster > 2) {
+		LCD_ERR("cluster count err (%d)\n", cnt_cluster);
+		goto end;
+	}
+
+	if (cnt_cluster == 1) {
+		/* single policy (none big-little case) */
+		LCD_INFO("cluster count is one...\n");
+
+		if (cluster == CPUFREQ_CLUSTER_ALL)
+			/* set all cores' freq to max*/
+			__mdss_samsung_set_cpufreq_cpu(vdd, enable,
+					cluster_info[0].cpu_man, CPUFREQ_MAX);
+		else
+			/* set all cores' freq to max * 70 percent */
+			__mdss_samsung_set_cpufreq_cpu(vdd, enable,
+				cluster_info[0].cpu_man, CPUFREQ_ALT_HIGH);
+		goto end;
+	}
+
+	/* big-little */
+	if (cluster_info[0].max_freq > cluster_info[1].max_freq) {
+		big_cpu_man = cluster_info[0].cpu_man;
+		little_cpu_man = cluster_info[1].cpu_man;
+	} else {
+		big_cpu_man = cluster_info[1].cpu_man;
+		little_cpu_man = cluster_info[0].cpu_man;
+	}
+
+	if (cluster == CPUFREQ_CLUSTER_BIG) {
+		__mdss_samsung_set_cpufreq_cpu(vdd, enable, big_cpu_man,
+				CPUFREQ_MAX);
+	} else if (cluster == CPUFREQ_CLUSTER_LITTLE) {
+		__mdss_samsung_set_cpufreq_cpu(vdd, enable, little_cpu_man,
+				CPUFREQ_MAX);
+	} else if  (cluster == CPUFREQ_CLUSTER_ALL) {
+		__mdss_samsung_set_cpufreq_cpu(vdd, enable, big_cpu_man,
+				CPUFREQ_MAX);
+		__mdss_samsung_set_cpufreq_cpu(vdd, enable, little_cpu_man,
+				CPUFREQ_MAX);
+	}
+
+end:
+	put_online_cpus();
+	mutex_unlock(&vdd->vdd_cpufreq_lock);
+}
+
+/* mdss_samsung_set_exclusive_packet():
+ * This shuold be called in ex_tx_lock lock.
+ */
+void mdss_samsung_set_exclusive_tx_packet(struct mdss_dsi_ctrl_pdata *ctrl,
+		enum mipi_samsung_tx_cmd_list cmd, int pass)
+{
+	struct dsi_panel_cmds *pcmds = NULL;
+
+	pcmds = mdss_samsung_cmds_select(ctrl, cmd, NULL);
+	pcmds->exclusive_pass = pass;
+}
+
+#define _ALIGN_DOWN(addr, size)  ((addr)&(~((size)-1)))
+#define MAX_DSI_FIFO_SIZE_HS_MODE	(480) /* AP limitation */
+#define MAX_SIZE_IMG_PAYLOAD	_ALIGN_DOWN((MAX_DSI_FIFO_SIZE_HS_MODE - 1), 12)
+
+int mdss_samsung_write_ddi_ram(struct mdss_dsi_ctrl_pdata *ctrl,
+				int target, u8 *buffer, int len)
+{
+	struct mdss_panel_info *pinfo = NULL;
+	u8 hdr_start;
+	u8 hdr_continue;
+	struct dsi_panel_cmds *tx_cmds;
+	struct dsi_cmd_desc *cmds;
+	u8 *payload;
+	int loop;
+	int remain;
+	int psize;
+	int rep;
+
+	LCD_INFO("+\n");
+	pinfo = &(ctrl->panel_data.panel_info);
+
+	tx_cmds = mdss_samsung_cmds_select(ctrl, TX_DDI_RAM_IMG_DATA, NULL);
+
+	if (target == MIPI_TX_TYPE_GRAM) {
+		hdr_start = pinfo->mipi.wr_mem_start;
+		hdr_continue = pinfo->mipi.wr_mem_continue;
+	} else if (target == MIPI_TX_TYPE_SIDERAM) {
+		hdr_start = pinfo->mipi.wr_sidemem_start;
+		hdr_continue = pinfo->mipi.wr_sidemem_continue;
+	} else {
+		LCD_ERR("invalid target (%d)\n", target);
+		return -EINVAL;
+	}
+
+	tx_cmds->link_state = DSI_HS_MODE;
+	tx_cmds->cmd_cnt = DIV_ROUND_UP(len, MAX_SIZE_IMG_PAYLOAD);
+
+	cmds = vzalloc(sizeof(struct dsi_cmd_desc) * tx_cmds->cmd_cnt);
+	payload = vzalloc((MAX_SIZE_IMG_PAYLOAD + 1) * tx_cmds->cmd_cnt);
+	tx_cmds->cmds = cmds;
+
+
+	LCD_INFO("len=%d, cmd_cnt=%d\n", len, tx_cmds->cmd_cnt);
+
+	/* split and fill image data to TX_DDI_RAM_IMG_DATA packet */
+	loop = 0;
+	remain = len;
+	while (remain > 0) {
+		cmds[loop].dchdr.dtype = DTYPE_GEN_LWRITE;
+		cmds[loop].dchdr.last = 1;
+		cmds[loop].payload = payload;
+
+		if (remain > MAX_SIZE_IMG_PAYLOAD)
+			psize = MAX_SIZE_IMG_PAYLOAD;
+		else
+			psize = remain;
+
+		if (loop == 0 && rep == 0)
+			*payload = hdr_start;
+		else
+			*payload = hdr_continue;
+		payload++;
+
+		memcpy(payload, buffer, psize);
+		cmds[loop].dchdr.dlen = psize + 1;
+
+		payload += psize;
+		buffer += psize;
+		remain -= psize;
+		loop++;
+
+	}
+
+	LCD_INFO("start tx gram\n");
+	mdss_samsung_send_cmd(ctrl, TX_DDI_RAM_IMG_DATA);
+	LCD_INFO("fin tx gram\n");
+
+	vfree(payload);
+	vfree(cmds);
+	LCD_INFO("-\n");
+
+	return 0;
+}
+
 int mdss_samsung_read_nv_mem(struct mdss_dsi_ctrl_pdata *ctrl, struct dsi_panel_cmds *cmds, unsigned char *buffer, int level_key)
 {
 	int nv_read_cnt = 0;
+
+	/* To block read operation at esd-recovery blank & unblank routine*/
+	if (ctrl->panel_data.panel_info.panel_dead)
+		return -EPERM;
 
 	if (level_key & LEVEL1_KEY)
 		mdss_samsung_send_cmd(ctrl, TX_LEVEL1_KEY_ENABLE);
@@ -1437,7 +1714,7 @@ int mdss_samsung_panel_on_post(struct mdss_panel_data *pdata)
 		* Brightenss cmds sent by samsung_display_hall_ic_status() at panel switching operation
 		*/
 		if ((vdd->ctrl_dsi[DISPLAY_1]->bklt_ctrl == BL_DCS_CMD) &&
-			(vdd->display_status_dsi[DISPLAY_1].hall_ic_mode_change_trigger == false))
+			(vdd->hall_ic_mode_change_trigger == false))
 			mdss_samsung_brightness_dcs(ctrl, vdd->bl_level);
 	} else {
 		if ((vdd->ctrl_dsi[DISPLAY_1]->bklt_ctrl == BL_DCS_CMD))
@@ -1465,7 +1742,18 @@ int mdss_samsung_panel_on_post(struct mdss_panel_data *pdata)
 	if (vdd->act_clock.is_support)
 			vdd->act_clock.update_image = false;
 
-	vdd->display_status_dsi[ndx].wait_disp_on = true;
+
+	/* Work around: For folder model, the status bar resizes itself and old UI appears in sub-panel
+	 * before premium watch or screen lock is on, so it needs to skip old UI.
+	 */
+	if (!vdd->lcd_flip_not_refresh &&
+			vdd->support_hall_ic &&
+			vdd->hall_ic_mode_change_trigger &&
+			vdd->lcd_flip_delay_ms) {
+		schedule_delayed_work(&vdd->delay_disp_on_work, msecs_to_jiffies(vdd->lcd_flip_delay_ms));
+	} else
+		vdd->display_status_dsi[ndx].wait_disp_on = true;
+
 	vdd->display_status_dsi[ndx].wait_actual_disp_on = true;
 	vdd->display_status_dsi[ndx].aod_delay = true;
 
@@ -1483,6 +1771,7 @@ int mdss_samsung_panel_on_post(struct mdss_panel_data *pdata)
 int mdss_samsung_panel_off_pre(struct mdss_panel_data *pdata)
 {
 	int ret = 0;
+	int rddpm,rddsm,errfg,dsierror;
 	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
 	struct samsung_display_driver_data *vdd =
 			(struct samsung_display_driver_data *)pdata->panel_private;
@@ -1504,10 +1793,11 @@ int mdss_samsung_panel_off_pre(struct mdss_panel_data *pdata)
 	}
 
 #ifdef CONFIG_DISPLAY_USE_INFO
-	mdss_samsung_read_rddpm(vdd);
-	mdss_samsung_read_rddsm(vdd);
-	mdss_samsung_read_errfg(vdd);
-	mdss_samsung_read_dsierr(vdd);
+	rddpm = mdss_samsung_read_rddpm(vdd);
+	rddsm = mdss_samsung_read_rddsm(vdd);
+	errfg = mdss_samsung_read_errfg(vdd);
+	dsierror = mdss_samsung_read_dsierr(vdd);
+	SS_XLOG(rddpm, rddsm, errfg, dsierror);
 #endif
 
 	if (pinfo->esd_check_enabled) {
@@ -1541,12 +1831,16 @@ int mdss_samsung_panel_off_post(struct mdss_panel_data *pdata)
 	if(vdd->support_mdnie_trans_dimming)
 		vdd->mdnie_disable_trans_dimming = true;
 
+
+	if (vdd->support_hall_ic && vdd->lcd_flip_delay_ms)
+		cancel_delayed_work(&vdd->delay_disp_on_work);
+
 	if (!IS_ERR_OR_NULL(vdd->panel_func.samsung_panel_off_post))
 		vdd->panel_func.samsung_panel_off_post(ctrl);
 
 	/* gradual acl on/off */
 	vdd->gradual_pre_acl_on = GRADUAL_ACL_UNSTABLE;
-
+	SS_XLOG(SS_XLOG_FINISH);
 	return ret;
 }
 
@@ -2682,12 +2976,45 @@ void mdss_samsung_panel_parse_dt_cmds(struct device_node *np,
 		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_IRC_OFF][panel_rev],
 				"samsung,irc_off_tx_cmds_rev", panel_rev, NULL);
 
+		/* Gram Checksum Test */
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GCT_ENTER][panel_rev],
+				"samsung,gct_enter_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GCT_VDDM_CTRL][panel_rev],
+				"samsung,gct_vddm_ctrl_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GCT_TEST_PATTERN_1][panel_rev],
+				"samsung,gct_pattern_1_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GCT_TEST_PATTERN_2][panel_rev],
+				"samsung,gct_pattern_2_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GCT_EXIT][panel_rev],
+				"samsung,gct_exit_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_rx_cmd_list[RX_GCT_CHECKSUM][panel_rev],
+				"samsung,gct_checksum_rx_cmds_rev", panel_rev, NULL);
+
 		/* MCD */
 		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_MCD_ON][panel_rev],
 				"samsung,mcd_on_tx_cmds_rev", panel_rev, NULL);
 
 		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_MCD_OFF][panel_rev],
 				"samsung,mcd_off_tx_cmds_rev", panel_rev, NULL);
+
+		/* Micro Short Test */
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_MICRO_SHORT_TEST_ON][panel_rev],
+				"samsung,micro_short_test_on_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_MICRO_SHORT_TEST_OFF][panel_rev],
+				"samsung,micro_short_test_off_tx_cmds_rev", panel_rev, NULL);
+
+		/* Gray Spot Test */
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GRAY_SPOT_TEST_ON][panel_rev],
+				"samsung,gray_spot_test_on_tx_cmds_rev", panel_rev, NULL);
+
+		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_GRAY_SPOT_TEST_OFF][panel_rev],
+				"samsung,gray_spot_test_off_tx_cmds_rev", panel_rev, NULL);
 
 		/* PoC */
 		parse_dt_data(np, &dtsi_data->panel_tx_cmd_list[TX_POC_ERASE][panel_rev],"samsung,poc_erase_tx_cmds_rev", panel_rev, NULL);
@@ -3062,6 +3389,15 @@ void mdss_samsung_panel_parse_dt(struct device_node *np,
 	LCD_ERR("alpm enable %s\n",
 		vdd->dtsi_data[ctrl->ndx].panel_lpm_enable ? "enabled" : "disabled");
 
+	/* Set HALL IC */
+	vdd->support_hall_ic  = of_property_read_bool(np, "samsung,mdss_dsi_hall_ic_enable");
+	LCD_ERR("hall_ic %s\n", vdd->support_hall_ic ? "enabled" : "disabled");
+
+
+	rc = of_property_read_u32(np, "samsung,mdss_dsi_lcd_flip_delay_ms", tmp);
+		vdd->lcd_flip_delay_ms = (!rc ? tmp[0] : 0);
+		LCD_ERR("lcd_flip_delay_ms %d\n", vdd->lcd_flip_delay_ms);
+
 	/*Set OSC TE fitting flag */
 	vdd->dtsi_data[ctrl->ndx].samsung_osc_te_fitting =
 		of_property_read_bool(np, "samsung,osc-te-fitting-enable");
@@ -3183,6 +3519,10 @@ void mdss_samsung_panel_parse_dt(struct device_node *np,
 	vdd->multires_stat.is_support = of_property_read_bool(np, "samsung,support_multires");
 	LCD_DEBUG("vdd->multires_stat.is_support = %d\n", vdd->multires_stat.is_support);
 
+	/* Gram Checksum Test */
+	vdd->gct.is_support = of_property_read_bool(np, "samsung,support_gct");
+	LCD_DEBUG("vdd->gct.is_support = %d\n", vdd->gct.is_support);
+
 	/* Active Clock */
 	vdd->act_clock.is_support = of_property_read_bool(np, "samsung,support_active_clock");
 	LCD_DEBUG("vdd->act_clock.is_support = %d\n", vdd->act_clock.is_support);
@@ -3241,20 +3581,15 @@ void mdss_samsung_panel_parse_dt(struct device_node *np,
 
 	mdss_samsung_panel_parse_dt_cmds(np, ctrl);
 
-	/* Set HALL IC */
-	vdd->support_hall_ic  = of_property_read_bool(np, "samsung,mdss_dsi_hall_ic_enable");
-	LCD_ERR("hall_ic %s\n", vdd->support_hall_ic ? "enabled" : "disabled");
-
 	if (vdd->support_hall_ic) {
 		vdd->hall_ic_notifier_display.priority = 0; /* Tsp is 1, Touch key is 2 */
 		vdd->hall_ic_notifier_display.notifier_call = samsung_display_hall_ic_status;
-#ifdef CONFIG_FOLDER_HALL
+#if defined(CONFIG_FOLDER_HALL)
 		hall_ic_register_notify(&vdd->hall_ic_notifier_display);
 #endif
 
 		mdss_samsung_panel_parse_dt_cmds(np, ctrl);
-		//temporary, MUST FIX
-		//vdd->mdnie_tune_state_dsi[DISPLAY_2] = init_dsi_tcon_mdnie_class(DISPLAY_2, vdd);
+		vdd->mdnie_tune_state_dsi[DISPLAY_2] = init_dsi_tcon_mdnie_class(DISPLAY_2, vdd);
 	}
 
 	// LCD SELECT
@@ -3262,6 +3597,8 @@ void mdss_samsung_panel_parse_dt(struct device_node *np,
 			"samsung,mdss_dsi_lcd_sel_gpio", 0);
 	if (gpio_is_valid(vdd->select_panel_gpio))
 		gpio_request(vdd->select_panel_gpio, "lcd_sel_gpio");
+
+	vdd->select_panel_use_expander_gpio = of_property_read_bool(np, "samsung,mdss_dsi_lcd_sel_use_expander_gpio");
 
 	/* Panel LPM */
 	rc = of_property_read_u32(np, "samsung,lpm-init-delay-ms", tmp);
@@ -3740,7 +4077,7 @@ int display_ndx_check(struct mdss_dsi_ctrl_pdata *ctrl)
 
 	if (vdd->support_hall_ic &&
 		mdss_panel_attached(DISPLAY_1) && mdss_panel_attached(DISPLAY_2)) {
-		if (vdd->display_status_dsi[DISPLAY_1].hall_ic_status == HALL_IC_OPEN)
+		if (vdd->hall_ic_status == HALL_IC_OPEN)
 			return DISPLAY_1; /*OPEN : Internal PANEL */
 		else
 			return DISPLAY_2; /*CLOSE : External PANEL */
@@ -3748,22 +4085,36 @@ int display_ndx_check(struct mdss_dsi_ctrl_pdata *ctrl)
 		return ctrl->ndx;
 }
 
-int samsung_display_hall_ic_status(struct notifier_block *nb,
-			unsigned long hall_ic, void *data)
+/*
+*@param:
+*	D0: hall_ic (the hall ic status, 0: foder open. 1: folder close)
+*	D8: flip_not_refresh (0: refresh after flipping. 1: don't refresh after flipping)
+*/
+	int samsung_display_hall_ic_status(struct notifier_block *nb,
+				unsigned long param, void *data)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = vdd_data.ctrl_dsi[DISPLAY_1];
 	struct fb_info *fbi = registered_fb[ctrl_pdata->ndx];
 	struct msm_fb_data_type *mfd = fbi->par;
 	struct mdss_panel_info *pinfo = mfd->panel_info;
+	bool hall_ic = (bool)(param & 0x1);
+	bool flip_not_refresh = (bool)(!!(param & LCD_FLIP_NOT_REFRESH));
+
 
 	/*
-		previou panel off -> current panel on
-
+		previous panel off -> current panel on
 		foder open : 0, close : 1
 	*/
 
+
 	if (!vdd_data.support_hall_ic)
 		return 0;
+
+	if (pinfo->blank_state == MDSS_PANEL_BLANK_LOW_POWER) {
+		vdd_data.hall_ic_status_unhandled = true;
+		vdd_data.hall_ic_status_pending = hall_ic;
+	 	return 0;
+	}
 
 	mutex_lock(&vdd_data.vdd_hall_ic_blank_unblank_lock); /*HALL IC blank mode change */
 	mutex_lock(&vdd_data.vdd_hall_ic_lock); /* HALL IC switching */
@@ -3773,25 +4124,26 @@ int samsung_display_hall_ic_status(struct notifier_block *nb,
 	/* check the lcd id for DISPLAY_1 and DISPLAY_2 */
 	if (mdss_panel_attached(DISPLAY_1) && mdss_panel_attached(DISPLAY_2)) {
 		/* To check current blank mode */
-		if ((vdd_data.vdd_blank_mode[DISPLAY_1] == FB_BLANK_UNBLANK ||
-			pinfo->blank_state == MDSS_PANEL_BLANK_LOW_POWER) &&
+		if (vdd_data.vdd_blank_mode[DISPLAY_1] == FB_BLANK_UNBLANK &&
 			ctrl_pdata->panel_data.panel_info.panel_state &&
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status != hall_ic) {
+			vdd_data.hall_ic_status != hall_ic) {
 
 			/* set flag */
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_mode_change_trigger = true;
+			vdd_data.hall_ic_mode_change_trigger = true;
+			vdd_data.lcd_flip_not_refresh = flip_not_refresh;
 
 			/* panel off */
 			ctrl_pdata->off(&ctrl_pdata->panel_data);
 
 			/* set status */
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status = hall_ic;
+			vdd_data.hall_ic_status = hall_ic;
 
 			/* panel on */
 			ctrl_pdata->on(&ctrl_pdata->panel_data);
 
 			/* clear flag */
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_mode_change_trigger = false;
+			vdd_data.hall_ic_mode_change_trigger = false;
+			vdd_data.lcd_flip_not_refresh = false;
 
 			/* Brightness setting */
 			if (vdd_data.ctrl_dsi[DISPLAY_1]->bklt_ctrl == BL_DCS_CMD) {
@@ -3805,21 +4157,22 @@ int samsung_display_hall_ic_status(struct notifier_block *nb,
 				mdss_samsung_send_cmd(ctrl_pdata, TX_DISPLAY_ON);
 
 			/* refresh a frame to panel */
-			if (vdd_data.ctrl_dsi[DISPLAY_1]->panel_mode == DSI_CMD_MODE) {
+			if (vdd_data.ctrl_dsi[DISPLAY_1]->panel_mode == DSI_CMD_MODE &&
+					!flip_not_refresh) {
 				fbi->fbops->fb_pan_display(&fbi->var, fbi);
 			}
 		} else {
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status = hall_ic;
+			vdd_data.hall_ic_status = hall_ic;
 			LCD_ERR("mdss skip display changing\n");
 		}
 	} else {
 		/* check the lcd id for DISPLAY_1 */
 		if (mdss_panel_attached(DISPLAY_1))
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status = HALL_IC_OPEN;
+			vdd_data.hall_ic_status = HALL_IC_OPEN;
 
 		/* check the lcd id for DISPLAY_2 */
 		if (mdss_panel_attached(DISPLAY_2))
-			vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status = HALL_IC_CLOSE;
+			vdd_data.hall_ic_status = HALL_IC_CLOSE;
 	}
 
 	mutex_unlock(&vdd_data.vdd_hall_ic_lock); /* HALL IC switching */
@@ -3830,17 +4183,27 @@ int samsung_display_hall_ic_status(struct notifier_block *nb,
 	return 0;
 }
 
+static void samsung_display_delay_disp_on_work(struct work_struct *work)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = vdd_data.ctrl_dsi[DISPLAY_1];
+	int ndx = display_ndx_check(ctrl_pdata);
+
+	LCD_INFO("wait_disp_on[%d] is set\n", ndx);
+	vdd_data.display_status_dsi[ndx].wait_disp_on = true;
+	mdss_samsung_send_cmd(ctrl_pdata, TX_DISPLAY_ON);
+}
+
 int get_hall_ic_status(char *mode)
 {
 	if (mode == NULL)
 		return true;
 
 	if (*mode - '0')
-		vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status = HALL_IC_CLOSE;
+		vdd_data.hall_ic_status = HALL_IC_CLOSE;
 	else
-		vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status = HALL_IC_OPEN;
+		vdd_data.hall_ic_status = HALL_IC_OPEN;
 
-	LCD_ERR("hall_ic : %s\n", vdd_data.display_status_dsi[DISPLAY_1].hall_ic_status ? "CLOSE" : "OPEN");
+	LCD_ERR("hall_ic : %s\n", vdd_data.hall_ic_status ? "CLOSE" : "OPEN");
 
 	return true;
 }

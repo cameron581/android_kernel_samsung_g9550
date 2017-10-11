@@ -48,7 +48,7 @@
 #include <linux/zsmalloc.h>
 #include <linux/zpool.h>
 #include <linux/mount.h>
-#include <linux/compaction.h>
+#include <linux/migrate.h>
 #include <linux/pagemap.h>
 
 #define ZSPAGE_MAGIC	0x58
@@ -254,7 +254,6 @@ struct zs_pool {
 	struct kmem_cache *handle_cachep;
 	struct kmem_cache *zspage_cachep;
 
-	gfp_t flags;	/* allocation flags used when growing pool */
 	atomic_long_t pages_allocated;
 
 	struct zs_pool_stats stats;
@@ -352,13 +351,14 @@ static int create_cache(struct zs_pool *pool)
 
 static void destroy_cache(struct zs_pool *pool)
 {
+	kmem_cache_destroy(pool->handle_cachep);
 	kmem_cache_destroy(pool->zspage_cachep);
 }
 
-static unsigned long cache_alloc_handle(struct zs_pool *pool)
+static unsigned long cache_alloc_handle(struct zs_pool *pool, gfp_t gfp)
 {
 	return (unsigned long)kmem_cache_alloc(pool->handle_cachep,
-		pool->flags & ~(__GFP_HIGHMEM|__GFP_MOVABLE));
+			gfp & ~(__GFP_HIGHMEM|__GFP_MOVABLE));
 }
 
 static void cache_free_handle(struct zs_pool *pool, unsigned long handle)
@@ -395,7 +395,12 @@ static void *zs_zpool_create(const char *name, gfp_t gfp,
 			     const struct zpool_ops *zpool_ops,
 			     struct zpool *zpool)
 {
-	return zs_create_pool(name, gfp);
+	/*
+	 * Ignore global gfp flags: zs_malloc() may be invoked from
+	 * different contexts and its caller must provide a valid
+	 * gfp mask.
+	 */
+	return zs_create_pool(name);
 }
 
 static void zs_zpool_destroy(void *pool)
@@ -406,7 +411,7 @@ static void zs_zpool_destroy(void *pool)
 static int zs_zpool_malloc(void *pool, size_t size, gfp_t gfp,
 			unsigned long *handle)
 {
-	*handle = zs_malloc(pool, size);
+	*handle = zs_malloc(pool, size, gfp);
 	return *handle ? 0 : -1;
 }
 static void zs_zpool_free(void *pool, unsigned long handle)
@@ -537,7 +542,7 @@ static void get_zspage_mapping(struct zspage *zspage,
 				unsigned int *class_idx,
 				enum fullness_group *fullness)
 {
-	VM_BUG_ON(zspage->magic != ZSPAGE_MAGIC);
+	BUG_ON(zspage->magic != ZSPAGE_MAGIC);
 
 	*fullness = zspage->fullness;
 	*class_idx = zspage->class;
@@ -873,7 +878,7 @@ static struct zspage *get_zspage(struct page *page)
 {
 	struct zspage *zspage = (struct zspage *)page->private;
 
-	VM_BUG_ON(zspage->magic != ZSPAGE_MAGIC);
+	BUG_ON(zspage->magic != ZSPAGE_MAGIC);
 	return zspage;
 }
 
@@ -1555,7 +1560,7 @@ static unsigned long obj_malloc(struct size_class *class,
  * otherwise 0.
  * Allocation requests with size > ZS_MAX_ALLOC_SIZE will fail.
  */
-unsigned long zs_malloc(struct zs_pool *pool, size_t size)
+unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 {
 	unsigned long handle, obj;
 	struct size_class *class;
@@ -1565,7 +1570,7 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size)
 	if (unlikely(!size || size > ZS_MAX_ALLOC_SIZE))
 		return 0;
 
-	handle = cache_alloc_handle(pool);
+	handle = cache_alloc_handle(pool, gfp);
 	if (!handle)
 		return 0;
 
@@ -1588,7 +1593,7 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size)
 
 	spin_unlock(&class->lock);
 
-	zspage = alloc_zspage(pool, class, pool->flags);
+	zspage = alloc_zspage(pool, class, gfp);
 	if (!zspage) {
 		cache_free_handle(pool, handle);
 		return 0;
@@ -2120,7 +2125,7 @@ int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	put_page(page);
 	page = newpage;
 
-	ret = 0;
+	ret = MIGRATEPAGE_SUCCESS;
 unpin_objects:
 	for (addr = s_addr + offset; addr < s_addr + pos;
 						addr += class->size) {
@@ -2419,7 +2424,7 @@ static int zs_register_shrinker(struct zs_pool *pool)
  * On success, a pointer to the newly created pool is returned,
  * otherwise NULL.
  */
-struct zs_pool *zs_create_pool(const char *name, gfp_t flags)
+struct zs_pool *zs_create_pool(const char *name)
 {
 	int i;
 	struct zs_pool *pool;
@@ -2493,7 +2498,6 @@ struct zs_pool *zs_create_pool(const char *name, gfp_t flags)
 		prev_class = class;
 	}
 
-	pool->flags = flags;
 
 	if (zs_pool_stat_create(pool, name))
 		goto err;

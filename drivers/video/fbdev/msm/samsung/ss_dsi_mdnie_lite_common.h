@@ -129,6 +129,8 @@ enum HDR {
 	HDR_1,
 	HDR_2,
 	HDR_3,
+	HDR_4,
+	HDR_5,
 	HDR_MAX
 };
 
@@ -156,12 +158,9 @@ struct mdnie_lite_tun_type {
 	char scr_white_green;
 	char scr_white_blue;
 
-	int scr_white_balanced_red;
-	int scr_white_balanced_green;
-	int scr_white_balanced_blue;
-
 	int night_mode_enable;
 	int night_mode_index;
+	int ldu_mode_index;
 
 	int index;
 	struct list_head used_list;
@@ -307,7 +306,12 @@ struct mdnie_lite_tune_data {
 	char dsi0_white_default_r;
 	char dsi0_white_default_g;
 	char dsi0_white_default_b;
-	int dsi0_white_rgb_enabled;
+	char dsi0_white_ldu_r;
+	char dsi0_white_ldu_g;
+	char dsi0_white_ldu_b;
+	int dsi0_white_balanced_r;
+	int dsi0_white_balanced_g;
+	int dsi0_white_balanced_b;
 
 /*******************************************
 *					DSI1 DATA
@@ -425,7 +429,12 @@ struct mdnie_lite_tune_data {
 	char dsi1_white_default_r;
 	char dsi1_white_default_g;
 	char dsi1_white_default_b;
-	int dsi1_white_rgb_enabled;
+	char dsi1_white_ldu_r;
+	char dsi1_white_ldu_g;
+	char dsi1_white_ldu_b;
+	int dsi1_white_balanced_r;
+	int dsi1_white_balanced_g;
+	int dsi1_white_balanced_b;
 };
 
 /* COMMON FUNCTION*/

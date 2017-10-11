@@ -17,16 +17,8 @@
 #include <linux/device.h>
 #include "mdss_fb.h"
 #include "mdss_hdmi_edid.h"
-
 #ifdef CONFIG_SEC_DISPLAYPORT
-#ifdef DEV_DBG
-#undef DEV_DBG
-#define DEV_DBG(fmt, args...)   pr_info(fmt, ##args)
-#endif
-#ifdef pr_debug
-#undef pr_debug
-#define pr_debug pr_info
-#endif
+#include <linux/dp_logger.h>
 #endif
 
 #define DBC_START_OFFSET 4
@@ -229,7 +221,7 @@ static int secdp_check_supported_resolution(struct msm_hdmi_mode_timing_info *in
 			int diff = support[i].refresh_rate - (info->refresh_rate / 1000);
 			diff *= diff;
 			if (diff < 2) {
-				pr_info("diff is less than 2\n");
+				pr_debug("diff is less than 2\n");
 				return 1;
 			}
 		}
@@ -1235,7 +1227,7 @@ static void hdmi_edid_extract_extended_data_blocks(
 				(etag[2] & (BIT(3) | BIT(2))) >> 2;
 			edid_ctrl->ce_scan_info =
 				etag[2] & (BIT(1) | BIT(0));
-			DEV_DBG("%s: Scan Info (pt|it|ce): (%d|%d|%d)",
+			DEV_DBG("%s: Scan Info (pt|it|ce): (%d|%d|%d)\n",
 				__func__,
 				edid_ctrl->pt_scan_info,
 				edid_ctrl->it_scan_info,
@@ -1247,17 +1239,17 @@ static void hdmi_edid_extract_extended_data_blocks(
 			hdmi_edid_parse_hvdb(edid_ctrl, etag);
 			break;
 		case Y420_CAPABILITY_MAP_DATA_BLOCK:
-			DEV_DBG("%s found Y420CMDB byte 3 = 0x%x",
+			DEV_DBG("%s found Y420CMDB byte 3 = 0x%x\n",
 				__func__, etag[2]);
 			hdmi_edid_parse_Y420CMDB(edid_ctrl, etag);
 			break;
 		case Y420_VIDEO_DATA_BLOCK:
-			DEV_DBG("%s found Y420VDB byte 3 = 0x%x",
+			DEV_DBG("%s found Y420VDB byte 3 = 0x%x\n",
 				__func__, etag[2]);
 			hdmi_edid_parse_Y420VDB(edid_ctrl, etag);
 			break;
 		case HDR_STATIC_METADATA_DATA_BLOCK:
-			DEV_DBG("%s found HDR Static Metadata. Byte 3 = 0x%x",
+			DEV_DBG("%s found HDR Static Metadata. Byte 3 = 0x%x\n",
 				__func__, etag[2]);
 			hdmi_edid_parse_hdrdb(edid_ctrl, etag);
 			edid_ctrl->hdr_supported = true;
@@ -1386,26 +1378,6 @@ static void hdmi_edid_extract_audio_data_blocks(
 #endif
 
 } /* hdmi_edid_extract_audio_data_blocks */
-
-#if defined(CONFIG_SEC_DISPLAYPORT)
-int get_audio_ch(void *input)
-{
-	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
-	return edid_ctrl->audio_channel_info;
-}
-
-u32 secdp_get_max_pclk(void *input)
-{
-	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
-	return edid_ctrl->init_data.max_pclk_khz;
-}
-
-void secdp_set_max_pclk(void *input, u32 pclk)
-{
-	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
-	edid_ctrl->init_data.max_pclk_khz = pclk;
-}
-#endif
 
 static void hdmi_edid_extract_speaker_allocation_data(
 	struct hdmi_edid_ctrl *edid_ctrl, const u8 *in_buf)
@@ -1830,7 +1802,7 @@ static void hdmi_edid_add_sink_video_format(struct hdmi_edid_ctrl *edid_ctrl,
 		return;
 	}
 
-	DEV_DBG("%s: EDID: format: %d [%s], %s\n", __func__,
+	DEV_INFO("%s: EDID: format: %d [%s], %s\n", __func__,
 		video_format, msm_hdmi_mode_2string(video_format),
 		supported ? "Supported" : "Not-Supported");
 
@@ -2656,6 +2628,11 @@ bool hdmi_edid_is_s3d_mode_supported(void *input, u32 video_mode, u32 s3d_mode)
 	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
 	struct hdmi_edid_sink_data *sink_data;
 
+	if (!edid_ctrl) {
+		DEV_ERR("%s: invalid input\n", __func__);
+		return false;
+	}
+
 	sink_data = &edid_ctrl->sink_data;
 	for (i = 0; i < sink_data->num_of_elements; ++i) {
 		if (sink_data->disp_mode_list[i].video_format != video_mode)
@@ -2791,6 +2768,28 @@ void hdmi_edid_config_override(void *input, bool enable,
 			__func__, ov_data->scramble, ov_data->sink_mode,
 			ov_data->format, ov_data->vic);
 	}
+}
+
+#if defined(CONFIG_SEC_DISPLAYPORT)
+int get_audio_ch(void *input)
+{
+	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
+	return edid_ctrl->audio_channel_info;
+}
+
+u32 hdmi_edid_get_max_pclk_rate(void *input)
+{
+	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
+
+	return edid_ctrl->init_data.max_pclk_khz;
+}
+#endif
+
+void hdmi_edid_set_max_pclk_rate(void *input, u32 max_pclk_khz)
+{
+	struct hdmi_edid_ctrl *edid_ctrl = (struct hdmi_edid_ctrl *)input;
+
+	edid_ctrl->init_data.max_pclk_khz = max_pclk_khz;
 }
 
 void hdmi_edid_deinit(void *input)

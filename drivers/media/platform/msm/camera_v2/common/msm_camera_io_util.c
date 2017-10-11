@@ -19,8 +19,10 @@
 #include <soc/qcom/camera2.h>
 #include <linux/msm-bus.h>
 #include "msm_camera_io_util.h"
+#include <linux/i2c.h>
 
 #define BUFF_SIZE_128 128
+extern unsigned int system_rev;
 
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
@@ -29,6 +31,14 @@
 extern bool sensor_retention_mode;
 #endif
 extern bool retention_mode_pwr;
+
+#if defined (CONFIG_SEC_DREAMQLTE_PROJECT) ||defined (CONFIG_SEC_DREAM2QLTE_PROJECT) || defined (CONFIG_SEC_CRUISERLTE_PROJECT)
+#define I2C_ADAPTER_LOCK //add i2c lock for avoided i2c conflict with nfc
+#endif
+
+#ifdef I2C_ADAPTER_LOCK
+extern struct i2c_adapter *g_msm_ois_i2c_adapter;
+#endif
 
 void msm_camera_io_w(u32 data, void __iomem *addr)
 {
@@ -634,6 +644,14 @@ int msm_camera_config_single_vreg(struct device *dev,
 {
 	int rc = 0;
 	const char *vreg_name = NULL;
+#ifdef I2C_ADAPTER_LOCK
+	struct i2c_adapter *adapter = NULL;
+
+	if (g_msm_ois_i2c_adapter)
+		adapter = g_msm_ois_i2c_adapter;
+	else
+		pr_info("%s: g_msm_ois_i2c_adapter is NULL\n", __func__);
+#endif
 
 	if (!dev || !cam_vreg || !reg_ptr) {
 		pr_err("%s: get failed NULL parameter\n", __func__);
@@ -707,8 +725,32 @@ int msm_camera_config_single_vreg(struct device *dev,
 				}
 			}
 #endif
+#if defined (CONFIG_SEC_GREATQLTE_PROJECT)
+			if ( (!strcmp(vreg_name, "s2mpb02-ldo4")) && 
+				(system_rev >= 7 ) ) {
+				pr_err("[syscamera::%s::%d][HW_REV(%d)>=07][ldo4][regulator_set_voltage]\n", __FUNCTION__, __LINE__, system_rev);
+				rc = regulator_set_voltage(
+					*reg_ptr, cam_vreg->max_voltage, cam_vreg->max_voltage);				
+				if (rc < 0) {
+					pr_err("%s: %s set voltage failed\n", __func__, vreg_name);
+				}
+			}
+#endif
 		}
+#ifdef I2C_ADAPTER_LOCK
+		if (adapter && !strcmp(vreg_name, "s2mpb02-ldo17")) {
+			CDBG("%s: i2c_lock_adapter\n", __func__);
+			i2c_lock_adapter(adapter);
+		}
+#endif
 		rc = regulator_enable(*reg_ptr);
+#ifdef I2C_ADAPTER_LOCK
+		if (adapter && !strcmp(vreg_name, "s2mpb02-ldo17")) {
+			usleep_range(1500, 2000);
+			i2c_unlock_adapter(adapter);
+			CDBG("%s: i2c_unlock_adapter\n", __func__);
+		}
+#endif
 		if (rc < 0) {
 			pr_err("%s: %s regulator_enable failed\n", __func__,
 				vreg_name);
@@ -718,7 +760,20 @@ int msm_camera_config_single_vreg(struct device *dev,
 		CDBG("%s disable %s\n", __func__, vreg_name);
 		if (*reg_ptr) {
 			CDBG("%s disable %s\n", __func__, vreg_name);
+#ifdef I2C_ADAPTER_LOCK
+			if (adapter && !strcmp(vreg_name, "s2mpb02-ldo17")) {
+				CDBG("%s: i2c_lock_adapter\n", __func__);
+				i2c_lock_adapter(adapter);
+			}
+#endif
 			regulator_disable(*reg_ptr);
+#ifdef I2C_ADAPTER_LOCK
+			if (adapter && !strcmp(vreg_name, "s2mpb02-ldo17")) {
+				usleep_range(1500, 2000);
+				i2c_unlock_adapter(adapter);
+				CDBG("%s: i2c_unlock_adapter\n", __func__);
+			}
+#endif
 			if (regulator_count_voltages(*reg_ptr) > 0) {
 				if (cam_vreg->op_mode >= 0)
 					regulator_set_load(*reg_ptr, 0);

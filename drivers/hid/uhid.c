@@ -1,4 +1,4 @@
-/*
+﻿/*
  * User-space I/O driver support for HID subsystem
  * Copyright (c) 2012 David Herrmann
  */

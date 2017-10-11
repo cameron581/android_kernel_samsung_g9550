@@ -1153,7 +1153,7 @@ static void module_on_master(void *device_data)
 
  	if (ts->input_dev->disabled) {
 		sec_ts_set_lowpowermode(ts, TO_LOWPOWER_MODE);
-		ts->power_status = SEC_TS_STATE_LPM_RESUME;
+		ts->power_status = SEC_TS_STATE_LPM;
 	}
 
 	if (ret == 0)
@@ -1425,6 +1425,7 @@ static void get_checksum_data(void *device_data)
 	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
 	char buff[16] = { 0 };
 	char csum_result[4] = { 0 };
+	char data[5] = { 0 };
 	u8 cal_result;
 	u8 nv_result;
 	u8 temp;
@@ -1438,6 +1439,55 @@ static void get_checksum_data(void *device_data)
 		goto err;
 	}
 
+	disable_irq(ts->client->irq);
+
+	ts->plat_data->power(ts, false);
+	ts->power_status = SEC_TS_STATE_POWER_OFF;
+	sec_ts_delay(50);
+
+	ts->plat_data->power(ts, true);
+	ts->power_status = SEC_TS_STATE_POWER_ON;
+	sec_ts_delay(70);
+	
+	ret = sec_ts_wait_for_ready(ts, SEC_TS_ACK_BOOT_COMPLETE);
+	if (ret < 0) {
+		enable_irq(ts->client->irq);
+		input_err(true, &ts->client->dev, "%s: boot complete failed\n", __func__);
+		snprintf(buff, sizeof(buff), "%s", "NG");
+		goto err;
+	}
+
+	ret = ts->sec_ts_i2c_read(ts, SEC_TS_READ_FIRMWARE_INTEGRITY, &data[0], 1);
+	if (ret < 0 || (data[0] != 0x80)) {
+		enable_irq(ts->client->irq);
+		input_err(true, &ts->client->dev, "%s: firmware integrity failed, ret:%d, data:%X\n",
+				__func__, ret, data[0]);
+		snprintf(buff, sizeof(buff), "%s", "NG");
+		goto err;
+	}
+
+	ret = ts->sec_ts_i2c_read(ts, SEC_TS_READ_BOOT_STATUS, &data[1], 1);
+	if (ret < 0 || (data[1] != SEC_TS_STATUS_APP_MODE)) {
+		enable_irq(ts->client->irq);
+		input_err(true, &ts->client->dev, "%s: boot status failed, ret:%d, data:%X\n", __func__, ret, data[0]);
+		snprintf(buff, sizeof(buff), "%s", "NG");
+		goto err;
+	}
+
+	ret = ts->sec_ts_i2c_read(ts, SEC_TS_READ_TS_STATUS, &data[2], 4);
+	if (ret < 0 || (data[3] == TOUCH_SYSTEM_MODE_FLASH)) {
+		enable_irq(ts->client->irq);
+		input_err(true, &ts->client->dev, "%s: touch status failed, ret:%d, data:%X\n", __func__, ret, data[3]);
+		snprintf(buff, sizeof(buff), "%s", "NG");
+		goto err;
+	}
+
+	sec_ts_reinit(ts);
+
+	enable_irq(ts->client->irq);
+
+	input_err(true, &ts->client->dev, "%s: data[0]:%X, data[1]:%X, data[3]:%X\n", __func__, data[0], data[1], data[3]);
+	
 	temp = DO_FW_CHECKSUM | DO_PARA_CHECKSUM;
 	ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_GET_CHECKSUM, &temp, 1);
 	if (ret < 0) {
@@ -1753,27 +1803,51 @@ void sec_ts_run_rawdata_all(struct sec_ts_data *ts)
 {
 	short min, max;
 	int ret;
+#ifdef USE_PRESSURE_SENSOR
+	short pressure[3] = { 0 };
+#endif
 
-	sec_ts_fix_tmode(ts, TOUCH_SYSTEM_MODE_TOUCH, TOUCH_MODE_STATE_TOUCH);
+	ret = sec_ts_fix_tmode(ts, TOUCH_SYSTEM_MODE_TOUCH, TOUCH_MODE_STATE_TOUCH);
+	if (ret < 0) {
+		input_err(true, &ts->client->dev, "%s: failed to fix tmode\n",
+				__func__);
+		return;
+	}
+
 	ret = sec_ts_read_frame(ts, TYPE_OFFSET_DATA_SEC, &min, &max);
 	if (ret < 0) {
 		input_err(true, &ts->client->dev, "%s: 19,Offset error ## ret:%d\n", __func__, ret);
 	} else {
 		input_err(true, &ts->client->dev, "%s: 19,Offset Max/Min %d,%d ##\n", __func__, max, min);
-		sec_ts_release_tmode(ts);
 	}
 
 	sec_ts_delay(20);
 
-	sec_ts_fix_tmode(ts, TOUCH_SYSTEM_MODE_TOUCH, TOUCH_MODE_STATE_TOUCH);
 	ret = sec_ts_read_frame(ts, TYPE_RAW_DATA, &min, &max);
 	if (ret < 0) {
 		input_err(true, &ts->client->dev, "%s: 0,Ambient error ## ret:%d\n", __func__, ret);
 	} else {
 		input_err(true, &ts->client->dev, "%s: 0,Ambient Max/Min %d,%d ##\n", __func__, max, min);
-		sec_ts_release_tmode(ts);
 	}
 
+#ifdef USE_PRESSURE_SENSOR
+	/* run pressure offset data read */
+	read_pressure_data(ts, TYPE_OFFSET_DATA_SEC, pressure);
+	sec_ts_delay(20);
+
+	/* run pressure rawdata read */
+	read_pressure_data(ts, TYPE_RAW_DATA, pressure);
+	sec_ts_delay(20);
+
+	/* run pressure raw delta read  */
+	read_pressure_data(ts, TYPE_REMV_AMB_DATA, pressure);
+	sec_ts_delay(20);
+
+	/* run pressure sigdata read */
+	read_pressure_data(ts, TYPE_SIGNAL_DATA, pressure);
+
+#endif
+	sec_ts_release_tmode(ts);
 }
 #endif
 
@@ -2079,9 +2153,13 @@ static void get_tsp_test_result(void *device_data)
 
 	snprintf(buff, sizeof(buff), "M:%s, M:%d, A:%s, A:%d",
 			result->module_result == 0 ? "NONE" :
-			result->module_result == 1 ? "FAIL" : "PASS", result->module_count,
+			result->module_result == 1 ? "FAIL" :
+			result->module_result == 2 ? "PASS" : "A",
+			result->module_count,
 			result->assy_result == 0 ? "NONE" :
-			result->assy_result == 1 ? "FAIL" : "PASS", result->assy_count);
+			result->assy_result == 1 ? "FAIL" :
+			result->assy_result == 2 ? "PASS" : "A",
+			result->assy_count);
 
 	sec_cmd_set_cmd_result(sec, buff, strlen(buff));
 	sec->cmd_state = SEC_CMD_STATUS_OK;
@@ -2888,7 +2966,7 @@ out_test_mode:
 	input_info(true, &ts->client->dev, "%s: %s\n", __func__, buff);
 }
 
-static int read_pressure_data(struct sec_ts_data *ts, u8 type, short *value)
+int read_pressure_data(struct sec_ts_data *ts, u8 type, short *value)
 {
 	unsigned char data[6] = { 0 };
 	short pressure[3] = { 0 };
@@ -2902,8 +2980,6 @@ static int read_pressure_data(struct sec_ts_data *ts, u8 type, short *value)
 		return -EIO;
 
 	if (data[0] != type) {
-		input_info(true, &ts->client->dev, "%s: type change to %02X\n", __func__, type);
-
 		data[1] = type;
 
 		ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SELECT_PRESSURE_TYPE, &data[1], 1);
@@ -2923,8 +2999,8 @@ static int read_pressure_data(struct sec_ts_data *ts, u8 type, short *value)
 	pressure[1] = (data[2] << 8 | data[3]);
 	pressure[2] = (data[4] << 8 | data[5]);
 
-	input_info(true, &ts->client->dev, "%s: Left: %d, Center: %d, Rignt: %d\n",
-		__func__, pressure[2], pressure[1], pressure[0]);
+	input_info(true, &ts->client->dev, "%s: Type:%d, Left: %d, Center: %d, Rignt: %d\n",
+		__func__, type, pressure[2], pressure[1], pressure[0]);
 
 	memcpy(value, pressure, 3 * 2);
 
@@ -3167,7 +3243,7 @@ static void set_pressure_strength(void *device_data)
 	data[1] = 0;
 	data[2] = ts->pressure_cal_delta + 1;
 	
-	ret= ts->sec_ts_i2c_write(ts, SEC_TS_CMD_NVM, buff, 3);
+	ret= ts->sec_ts_i2c_write(ts, SEC_TS_CMD_NVM, data, 3);
 	if (ret < 0)
 		input_err(true, &ts->client->dev,
 			"%s: nvm write failed. ret: %d\n", __func__, ret);

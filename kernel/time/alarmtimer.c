@@ -99,11 +99,9 @@ void power_on_alarm_init(void)
  * Get the soonest power off alarm timer and set the alarm value into rtc
  * register.
  */
-#ifdef CONFIG_RTC_AUTO_PWRON
-inline void set_power_on_alarm(void) { }
-#else
 void set_power_on_alarm(void)
 {
+#ifndef CONFIG_RTC_AUTO_PWRON
 	int rc;
 	struct timespec wall_time, alarm_ts;
 	long alarm_secs = 0l;
@@ -163,8 +161,8 @@ disable_alarm:
 	rtc_alarm_irq_enable(rtcdev, 0);
 exit:
 	mutex_unlock(&power_on_alarm_lock);
+#endif /* CONFIG_RTC_AUTO_PWRON */
 }
-#endif
 
 static void alarmtimer_triggered_func(void *p)
 {
@@ -275,7 +273,7 @@ int alarm_set_alarm(char* alarm_data)
 
 	alm.enabled = (*buf_ptr == '1');
 
-	pr_info("[SAPA] %s : %s => tm(%d %04d-%02d-%02d %02d:%02d:%02d)\n",
+	pr_info("sapa %s: %s => tm(%d %04d-%02d-%02d %02d:%02d:%02d)\n",
 			__func__, buf_ptr, alm.enabled,
 			alm.time.tm_year, alm.time.tm_mon, alm.time.tm_mday,
 			alm.time.tm_hour, alm.time.tm_min, alm.time.tm_sec);
@@ -286,20 +284,20 @@ int alarm_set_alarm(char* alarm_data)
 		alm.time.tm_mon -= 1;
 		alm.time.tm_year -= 1900;
 
-		/* read current time */
-		rtc_read_time(rtcdev, &rtc_tm);
-		rtc_tm_to_time(&rtc_tm, &rtc_sec);
-		pr_info("[SAPA] rtc  %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
-			rtc_tm.tm_year, rtc_tm.tm_mon, rtc_tm.tm_mday,
-			rtc_tm.tm_hour, rtc_tm.tm_min, rtc_tm.tm_sec, rtc_sec);
-
 		/* read kernel time */
 		getnstimeofday(&wall_time);
 		wall_ktm = timespec_to_ktime(wall_time);
 		wall_tm = rtc_ktime_to_tm(wall_ktm);
-		pr_info("[SAPA] wall %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
+		pr_info("set_sapa: <ktm > %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
 			wall_tm.tm_year, wall_tm.tm_mon, wall_tm.tm_mday,
 			wall_tm.tm_hour, wall_tm.tm_min, wall_tm.tm_sec, wall_time.tv_sec);
+
+		/* read current time */
+		rtc_read_time(rtcdev, &rtc_tm);
+		rtc_tm_to_time(&rtc_tm, &rtc_sec);
+		pr_info("set_sapa: <rtc > %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
+			rtc_tm.tm_year, rtc_tm.tm_mon, rtc_tm.tm_mday,
+			rtc_tm.tm_hour, rtc_tm.tm_min, rtc_tm.tm_sec, rtc_sec);
 
 		/* calculate offset */
 		set_normalized_timespec(&rtc_delta,
@@ -312,14 +310,14 @@ int alarm_set_alarm(char* alarm_data)
 		/* convert to RTC time with user requested SAPA time and offset */
 		rtc_alarm_time -= rtc_delta.tv_sec;
 		rtc_time_to_tm(rtc_alarm_time, &alm.time);
-		pr_info("[SAPA] arlm %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
+		pr_info("set_sapa: <alrm> %4d-%02d-%02d %02d:%02d:%02d -> %lu\n",
 			alm.time.tm_year, alm.time.tm_mon, alm.time.tm_mday,
 			alm.time.tm_hour, alm.time.tm_min, alm.time.tm_sec, rtc_alarm_time);
 
 	}
 	ret = rtc_set_bootalarm(rtcdev, &alm);
 	if (ret < 0) {
-		printk( "alarm_set_alarm: "
+		pr_info("alarm_set_alarm: "
 			"Failed to set ALARM, time will be lost on reboot\n");
 		return -2;
 	}
@@ -495,6 +493,7 @@ static int alarmtimer_suspend(struct device *dev)
 		struct alarm_base *base = &alarm_bases[i];
 		struct timerqueue_node *next;
 		ktime_t delta;
+		struct alarm *palarm;
 
 		spin_lock_irqsave(&base->lock, flags);
 		next = timerqueue_getnext(&base->timerqueue);
@@ -502,6 +501,12 @@ static int alarmtimer_suspend(struct device *dev)
 		if (!next)
 			continue;
 		delta = ktime_sub(next->expires, base->gettime());
+
+		palarm = container_of(next, struct alarm, node); 
+		pr_info("[%s] cntvct : %lld, gettime : %lld, alarm : %p,\
+			alarm->function : %pF, expires : %lld, delta : %lld\n",
+			__func__, arch_counter_get_cntvct(), ktime_to_ns(base->gettime()),
+			palarm, palarm->function, ktime_to_ns(next->expires), ktime_to_ns(delta));
 		if (!min.tv64 || (delta.tv64 < min.tv64))
 			min = delta;
 	}

@@ -112,6 +112,9 @@ struct hrm_func {
 };
 
 struct hrm_device_data {
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	struct platform_device *pdev;
+#endif
 	struct i2c_client *hrm_i2c_client;
 	struct device *dev;
 	struct input_dev *hrm_input_dev;

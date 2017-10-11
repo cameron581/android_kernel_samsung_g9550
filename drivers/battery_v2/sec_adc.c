@@ -60,7 +60,11 @@ static int sec_bat_adc_ap_read(struct sec_battery_info *battery, int channel)
 	switch (channel)
 	{
 	case SEC_BAT_ADC_CHANNEL_TEMP:
+#if defined(CONFIG_SEC_KELLYLTE_PROJECT)
+		rc = qpnp_vadc_read(adc_client, VADC_AMUX5_GPIO_PU2, &results);
+#else
 		rc = qpnp_vadc_read(adc_client, VADC_AMUX3_GPIO_PU2, &results);
+#endif
 		if (rc) {
 			pr_err("%s: Unable to read batt temperature rc=%d\n",
 					__func__, rc);
@@ -100,7 +104,11 @@ static int sec_bat_adc_ap_read(struct sec_battery_info *battery, int channel)
 		data = results.adc_code;
 		break;
 	case SEC_BAT_ADC_CHANNEL_WPC_TEMP:
+#if defined(CONFIG_SEC_KELLYLTE_PROJECT)
+		rc = qpnp_vadc_read(adc_client, VADC_AMUX_THM4_PU2, &results);
+#else
 		rc = qpnp_vadc_read(adc_client, VADC_AMUX3_GPIO_PU2, &results);
+#endif
 		if (rc) {
 			pr_err("%s: Unable to read wpc temperature rc=%d\n",
 				__func__, rc);

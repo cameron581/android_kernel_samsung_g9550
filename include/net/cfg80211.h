@@ -67,6 +67,10 @@ struct wiphy;
 #define CFG80211_CONNECT_PREV_BSSID 1
 #define CFG80211_CONNECT_BSS 1
 #define CFG80211_ABORT_SCAN 1
+#define CFG80211_UPDATE_CONNECT_PARAMS 1
+#define CFG80211_BEACON_TX_RATE_CUSTOM_BACKPORT 1
+#define CFG80211_RAND_TA_FOR_PUBLIC_ACTION_FRAME 1
+#define CFG80211_REPORT_BETTER_BSS_IN_SCHED_SCAN 1
 
 /*
  * wireless hardware capability structures
@@ -731,7 +735,7 @@ struct cfg80211_bitrate_mask {
  *	MAC address based access control
  * @pbss: If set, start as a PCP instead of AP. Relevant for DMG
  *	networks.
- * @beacon_rate: masks for setting user configured beacon tx rate.
+ * @beacon_rate: bitrate to be used for beacons
  */
 struct cfg80211_ap_settings {
 	struct cfg80211_chan_def chandef;
@@ -1393,6 +1397,7 @@ struct mesh_config {
  * @beacon_interval: beacon interval to use
  * @mcast_rate: multicat rate for Mesh Node [6Mbps is the default for 802.11a]
  * @basic_rates: basic rates to use when creating the mesh
+ * @beacon_rate: bitrate to be used for beacons
  *
  * These parameters are fixed when the mesh is created.
  */
@@ -1413,6 +1418,7 @@ struct mesh_setup {
 	u16 beacon_interval;
 	int mcast_rate[IEEE80211_NUM_BANDS];
 	u32 basic_rates;
+	struct cfg80211_bitrate_mask beacon_rate;
 };
 
 /**
@@ -1564,6 +1570,17 @@ struct cfg80211_sched_scan_plan {
 };
 
 /**
+ * struct cfg80211_bss_select_adjust - BSS selection with RSSI adjustment.
+ *
+ * @band: band of BSS which should match for RSSI level adjustment.
+ * @delta: value of RSSI level adjustment.
+ */
+struct cfg80211_bss_select_adjust {
+	enum nl80211_band band;
+	s8 delta;
+};
+
+/**
  * struct cfg80211_sched_scan_request - scheduled scan request description
  *
  * @ssids: SSIDs to scan for (passed in the probe_reqs in active scans)
@@ -1598,6 +1615,16 @@ struct cfg80211_sched_scan_plan {
  *	cycle.  The driver may ignore this parameter and start
  *	immediately (or at any other time), if this feature is not
  *	supported.
+ * @relative_rssi_set: Indicates whether @relative_rssi is set or not.
+ * @relative_rssi: Relative RSSI threshold in dB to restrict scan result
+ *	reporting in connected state to cases where a matching BSS is determined
+ *	to have better or slightly worse RSSI than the current connected BSS.
+ *	The relative RSSI threshold values are ignored in disconnected state.
+ * @rssi_adjust: delta dB of RSSI preference to be given to the BSSs that belong
+ *	to the specified band while deciding whether a better BSS is reported
+ *	using @relative_rssi. If delta is a negative number, the BSSs that
+ *	belong to the specified band will be penalized by delta dB in relative
+ *	comparisions.
  */
 struct cfg80211_sched_scan_request {
 	struct cfg80211_ssid *ssids;
@@ -1616,6 +1643,10 @@ struct cfg80211_sched_scan_request {
 
 	u8 mac_addr[ETH_ALEN] __aligned(2);
 	u8 mac_addr_mask[ETH_ALEN] __aligned(2);
+
+	bool relative_rssi_set;
+	s8 relative_rssi;
+	struct cfg80211_bss_select_adjust rssi_adjust;
 
 	/* internal */
 	struct wiphy *wiphy;
@@ -1902,6 +1933,22 @@ struct cfg80211_ibss_params {
 };
 
 /**
+ * struct cfg80211_bss_selection - connection parameters for BSS selection.
+ *
+ * @behaviour: requested BSS selection behaviour.
+ * @param: parameters for requestion behaviour.
+ * @band_pref: preferred band for %NL80211_BSS_SELECT_ATTR_BAND_PREF.
+ * @adjust: parameters for %NL80211_BSS_SELECT_ATTR_RSSI_ADJUST.
+ */
+struct cfg80211_bss_selection {
+	enum nl80211_bss_select_attr behaviour;
+	union {
+		enum ieee80211_band band_pref;
+		struct cfg80211_bss_select_adjust adjust;
+	} param;
+};
+
+/**
  * struct cfg80211_connect_params - Connection parameters
  *
  * This structure provides information needed to complete IEEE 802.11
@@ -1938,6 +1985,7 @@ struct cfg80211_ibss_params {
  * @vht_capa_mask: The bits of vht_capa which are to be used.
  * @pbss: if set, connect to a PCP instead of AP. Valid for DMG
  *	networks.
+ * @bss_select: criteria to be used for BSS selection.
  * @prev_bssid: previous BSSID, if not %NULL use reassociate frame
  */
 struct cfg80211_connect_params {
@@ -1962,7 +2010,20 @@ struct cfg80211_connect_params {
 	struct ieee80211_vht_cap vht_capa;
 	struct ieee80211_vht_cap vht_capa_mask;
 	bool pbss;
+	struct cfg80211_bss_selection bss_select;
 	const u8 *prev_bssid;
+};
+
+/**
+ * enum cfg80211_connect_params_changed - Connection parameters being updated
+ *
+ * This enum provides information of all connect parameters that
+ * have to be updated as part of update_connect_params() call.
+ *
+ * @UPDATE_ASSOC_IES: Indicates whether association request IEs are updated
+ */
+enum cfg80211_connect_params_changed {
+	UPDATE_ASSOC_IES		= BIT(0),
 };
 
 /**
@@ -2380,6 +2441,14 @@ struct cfg80211_qos_map {
  *	If the connection fails for some reason, call cfg80211_connect_result()
  *	with the status from the AP.
  *	(invoked with the wireless_dev mutex held)
+ * @update_connect_params: Update the connect parameters while connected to a
+ *	BSS. The updated parameters can be used by driver/firmware for
+ *	subsequent BSS selection (roaming) decisions and to form the
+ *	Authentication/(Re)Association Request frames. This call does not
+ *	request an immediate disassociation or reassociation with the current
+ *	BSS, i.e., this impacts only subsequent (re)associations. The bits in
+ *	changed are defined in &enum cfg80211_connect_params_changed.
+ *	(invoked with the wireless_dev mutex held)
  * @disconnect: Disconnect from the BSS/ESS.
  *	(invoked with the wireless_dev mutex held)
  *
@@ -2650,6 +2719,10 @@ struct cfg80211_ops {
 
 	int	(*connect)(struct wiphy *wiphy, struct net_device *dev,
 			   struct cfg80211_connect_params *sme);
+	int	(*update_connect_params)(struct wiphy *wiphy,
+					 struct net_device *dev,
+					 struct cfg80211_connect_params *sme,
+					 u32 changed);
 	int	(*disconnect)(struct wiphy *wiphy, struct net_device *dev,
 			      u16 reason_code);
 
@@ -3255,6 +3328,9 @@ struct wiphy_iftype_ext_capab {
  *	low rssi when a frame is heard on different channel, then it should set
  *	this variable to the maximal offset for which it can compensate.
  *	This value should be set in MHz.
+ * @bss_select_support: bitmask indicating the BSS selection criteria supported
+ *	by the driver in the .connect() callback. The bit position maps to the
+ *	attribute indices defined in &enum nl80211_bss_select_attr.
  */
 struct wiphy {
 	/* assign these fields before you register the wiphy */
@@ -3381,6 +3457,8 @@ struct wiphy {
 
 	u8 max_num_csa_counters;
 	u8 max_adj_channel_rssi_comp;
+
+	u32 bss_select_support;
 
 	char priv[0] __aligned(NETDEV_ALIGN);
 };
@@ -5395,6 +5473,21 @@ int cfg80211_iter_combinations(struct wiphy *wiphy,
 			       void (*iter)(const struct ieee80211_iface_combination *c,
 					    void *data),
 			       void *data);
+
+/*
+ * cfg80211_stop_iface - trigger interface disconnection
+ *
+ * @wiphy: the wiphy
+ * @wdev: wireless device
+ * @gfp: context flags
+ *
+ * Trigger interface to be stopped as if AP was stopped, IBSS/mesh left, STA
+ * disconnected.
+ *
+ * Note: This doesn't need any locks and is asynchronous.
+ */
+void cfg80211_stop_iface(struct wiphy *wiphy, struct wireless_dev *wdev,
+			 gfp_t gfp);
 
 /**
  * cfg80211_shutdown_all_interfaces - shut down all interfaces for a wiphy

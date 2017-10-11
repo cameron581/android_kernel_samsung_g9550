@@ -156,13 +156,24 @@ __rwsem_mark_wake(struct rw_semaphore *sem,
 		oldcount = atomic_long_add_return(adjustment, &sem->count) - adjustment;
 
 		if (unlikely(oldcount < RWSEM_WAITING_BIAS)) {
-			/* A writer stole the lock. Undo our reader grant. */
-			if (atomic_long_sub_return(adjustment, &sem->count) &
-						RWSEM_ACTIVE_MASK)
+			/*
+			 * If the count is still less than RWSEM_WAITING_BIAS
+			 * after removing the adjustment, it is assumed that
+			 * a writer has stolen the lock. We have to undo our
+			 * reader grant.
+			 */
+			if (atomic_long_add_return(-adjustment, &sem->count) <
+			    RWSEM_WAITING_BIAS)
 				goto out;
 			/* Last active locker left. Retry waking readers. */
 			goto try_reader_grant;
 		}
+		/*
+		 * It is not really necessary to set it to reader-owned here,
+		 * but it gives the spinners an early indication that the
+		 * readers now have the lock.
+		 */
+		rwsem_set_reader_owned(sem);
 	}
 
 	/* Grant an infinite number of read locks to the readers at the front
@@ -325,16 +336,11 @@ static inline bool rwsem_can_spin_on_owner(struct rw_semaphore *sem)
 
 	rcu_read_lock();
 	owner = READ_ONCE(sem->owner);
-	if (!owner) {
-		long count = atomic_long_read(&sem->count);
+	if (!rwsem_owner_is_writer(owner)) {
 		/*
-		 * If sem->owner is not set, yet we have just recently entered the
-		 * slowpath with the lock being active, then there is a possibility
-		 * reader(s) may have the lock. To be safe, bail spinning in these
-		 * situations.
+		 * Don't spin if the rwsem is readers owned.
 		 */
-		if (count & RWSEM_ACTIVE_MASK)
-			ret = false;
+		ret = !rwsem_owner_is_reader(owner);
 		goto done;
 	}
 
@@ -344,10 +350,15 @@ done:
 	return ret;
 }
 
-static noinline
-bool rwsem_spin_on_owner(struct rw_semaphore *sem, struct task_struct *owner)
+/*
+ * Return true only if we can still spin on the owner field of the rwsem.
+ */
+static noinline bool rwsem_spin_on_owner(struct rw_semaphore *sem)
 {
-	long count;
+	struct task_struct *owner = READ_ONCE(sem->owner);
+
+	if (!rwsem_owner_is_writer(owner))
+		goto out;
 
 	rcu_read_lock();
 	while (sem->owner == owner) {
@@ -368,22 +379,16 @@ bool rwsem_spin_on_owner(struct rw_semaphore *sem, struct task_struct *owner)
 		cpu_relax_lowlatency();
 	}
 	rcu_read_unlock();
-
-	if (READ_ONCE(sem->owner))
-		return true; /* new owner, continue spinning */
-
+out:
 	/*
-	 * When the owner is not set, the lock could be free or
-	 * held by readers. Check the counter to verify the
-	 * state.
-	 */
-	count = atomic_long_read(&sem->count);
-	return (count == 0 || count == RWSEM_WAITING_BIAS);
+	 * If there is a new owner or the owner is not set, we continue
+	 * spinning.
+ 	 */
+	return !rwsem_owner_is_reader(READ_ONCE(sem->owner));
 }
 
 static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 {
-	struct task_struct *owner;
 	bool taken = false;
 
 	preempt_disable();
@@ -395,12 +400,17 @@ static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 	if (!osq_lock(&sem->osq))
 		goto done;
 
-	while (true) {
-		owner = READ_ONCE(sem->owner);
-		if (owner && !rwsem_spin_on_owner(sem, owner))
-			break;
-
-		/* wait_lock will be acquired if write_lock is obtained */
+	/*
+	 * Optimistically spin on the owner field and attempt to acquire the
+	 * lock whenever the owner changes. Spinning will be stopped when:
+	 *  1) the owning writer isn't running; or
+	 *  2) readers own the lock as we can't determine if they are
+	 *     actively running or not.
+	 */
+	while (rwsem_spin_on_owner(sem)) {
+		/*
+		* Try to acquire the lock
+		*/
 		if (rwsem_try_write_lock_unqueued(sem)) {
 			taken = true;
 			break;
@@ -412,7 +422,7 @@ static bool rwsem_optimistic_spin(struct rw_semaphore *sem)
 		 * we're an RT task that will live-lock because we won't let
 		 * the owner complete.
 		 */
-		if (!owner && (need_resched() || rt_task(current)))
+		if (!sem->owner && (need_resched() || rt_task(current)))
 			break;
 
 		/*

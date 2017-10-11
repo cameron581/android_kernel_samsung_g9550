@@ -190,7 +190,7 @@ static int32_t msm_camera_tz_i2c_ta_power_up(
 		cmd->sensor_id = sensor_id;
 #if defined (CONFIG_SEC_DREAMQLTE_PROJECT) // SS iris
 		cmd->model = 1;
-#elif defined (CONFIG_SEC_DREAM2QLTE_PROJECT) || defined (CONFIG_SEC_CRUISERLTE_PROJECT)
+#elif defined (CONFIG_SEC_DREAM2QLTE_PROJECT) || defined (CONFIG_SEC_CRUISERLTE_PROJECT) || defined (CONFIG_SEC_GREATQLTE_PROJECT)
 		cmd->model = 2;
 #else
 		cmd->model = 0;
@@ -424,7 +424,7 @@ static int32_t msm_camera_tz_i2c_ta_cci_write(
 #if 1 // SS iris
 		if (addr == ADDR_STOP_STREAM) {
 			CDBG("delay for stop_stream\n");
-			msleep(30);
+			msleep(50);
 		}
 #endif
 		rc = rsp->rc;
@@ -540,14 +540,16 @@ int32_t msm_camera_tz_i2c_power_up(
 				msm_camera_tz_get_ta_handle(),
 				sensor_id,
 				&sensor_secure);
-			if (!rc && sensor_secure)
+			if (!rc && sensor_secure) {
 				/* Sensor validated by TA*/
 				sensor_info[sensor_id].ready++;
-			else {
+				msm_camera_tz_unlock();
+			} else {
+				msm_camera_tz_unlock();
 				msm_camera_tz_unload_ta();
 				rc = -EFAULT;
 			}
-			msm_camera_tz_unlock();
+			//msm_camera_tz_unlock();
 		}
 	} else
 		rc = -EFAULT;

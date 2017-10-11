@@ -29,6 +29,7 @@
 #include <linux/ptrace.h>
 #include <asm/processor.h>
 #include <asm/irq.h>
+#include <asm/memory.h>
 
 struct sec_debug_summary *secdbg_summary;
 struct sec_debug_summary_data_apss *secdbg_apss;
@@ -62,6 +63,9 @@ EXPORT_SYMBOL(cpu_state);
 
 int sec_debug_save_die_info(const char *str, struct pt_regs *regs)
 {
+#ifdef CONFIG_USER_RESET_DEBUG
+	_kern_ex_info_t *p_ex_info;
+#endif
 	if (!secdbg_apss)
 		return -ENOMEM;
 	snprintf(secdbg_apss->excp.pc_sym, sizeof(secdbg_apss->excp.pc_sym),
@@ -71,22 +75,23 @@ int sec_debug_save_die_info(const char *str, struct pt_regs *regs)
 
 #ifdef CONFIG_USER_RESET_DEBUG
 	if (sec_debug_reset_ex_info) {
-		if (sec_debug_reset_ex_info->cpu == -1) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		if (p_ex_info->cpu == -1) {
 			int slen;
 			char *msg;
 
-			sec_debug_reset_ex_info->cpu = smp_processor_id();
-			snprintf(sec_debug_reset_ex_info->task_name,
-				sizeof(sec_debug_reset_ex_info->task_name), "%s", current->comm);
-			sec_debug_reset_ex_info->ktime = local_clock();
-			snprintf(sec_debug_reset_ex_info->pc,
-				sizeof(sec_debug_reset_ex_info->pc), "%pS", (void *)regs->ARM_PT_REG_PC);
-			snprintf(sec_debug_reset_ex_info->lr,
-				sizeof(sec_debug_reset_ex_info->lr), "%pS", (void *)regs->ARM_PT_REG_LR);
-			slen = snprintf(sec_debug_reset_ex_info->panic_buf,
-				sizeof(sec_debug_reset_ex_info->panic_buf), "%s", str);
+			p_ex_info->cpu = smp_processor_id();
+			snprintf(p_ex_info->task_name,
+				sizeof(p_ex_info->task_name), "%s", current->comm);
+			p_ex_info->ktime = local_clock();
+			snprintf(p_ex_info->pc,
+				sizeof(p_ex_info->pc), "%pS", (void *)regs->ARM_PT_REG_PC);
+			snprintf(p_ex_info->lr,
+				sizeof(p_ex_info->lr), "%pS", (void *)regs->ARM_PT_REG_LR);
+			slen = snprintf(p_ex_info->panic_buf,
+				sizeof(p_ex_info->panic_buf), "%s", str);
 
-			msg = sec_debug_reset_ex_info->panic_buf;
+			msg = p_ex_info->panic_buf;
 
 			if ((slen >= 1) && (msg[slen-1] == '\n'))
 				msg[slen-1] = 0;
@@ -98,6 +103,9 @@ int sec_debug_save_die_info(const char *str, struct pt_regs *regs)
 
 int sec_debug_save_panic_info(const char *str, unsigned long caller)
 {
+#ifdef CONFIG_USER_RESET_DEBUG
+	_kern_ex_info_t *p_ex_info;
+#endif
 	if (!secdbg_apss)
 		return -ENOMEM;
 	snprintf(secdbg_apss->excp.panic_caller,
@@ -110,20 +118,21 @@ int sec_debug_save_panic_info(const char *str, unsigned long caller)
 
 #ifdef CONFIG_USER_RESET_DEBUG
 	if (sec_debug_reset_ex_info) {
-		if (sec_debug_reset_ex_info->cpu == -1) {
+		p_ex_info = &sec_debug_reset_ex_info->kern_ex_info.info;
+		if (p_ex_info->cpu == -1) {
 			int slen;
 			char *msg;
 
-			sec_debug_reset_ex_info->cpu = smp_processor_id();
-			snprintf(sec_debug_reset_ex_info->task_name,
-				sizeof(sec_debug_reset_ex_info->task_name), "%s", current->comm);
-			sec_debug_reset_ex_info->ktime = local_clock();
-			snprintf(sec_debug_reset_ex_info->lr,
-				sizeof(sec_debug_reset_ex_info->lr), "%pS", (void *)caller);
-			slen = snprintf(sec_debug_reset_ex_info->panic_buf,
-				sizeof(sec_debug_reset_ex_info->panic_buf), "%s", str);
+			p_ex_info->cpu = smp_processor_id();
+			snprintf(p_ex_info->task_name,
+				sizeof(p_ex_info->task_name), "%s", current->comm);
+			p_ex_info->ktime = local_clock();
+			snprintf(p_ex_info->lr,
+				sizeof(p_ex_info->lr), "%pS", (void *)caller);
+			slen = snprintf(p_ex_info->panic_buf,
+				sizeof(p_ex_info->panic_buf), "%s", str);
 
-			msg = sec_debug_reset_ex_info->panic_buf;
+			msg = p_ex_info->panic_buf;
 
 			if ((slen >= 1) && (msg[slen-1] == '\n'))
 				msg[slen-1] = 0;
@@ -221,8 +230,11 @@ static int __init _set_kconst(struct sec_debug_summary_data_apss *p)
 	p->kconst.per_cpu_offset.pa = virt_to_phys(__per_cpu_offset);
 	p->kconst.per_cpu_offset.size = sizeof(__per_cpu_offset[0]);
 	p->kconst.per_cpu_offset.count = sizeof(__per_cpu_offset)/sizeof(__per_cpu_offset[0]);
-	p->kconst.virt_to_phys = (uint64_t)virt_to_phys(0);
-	p->kconst.phys_to_virt = (uint64_t)phys_to_virt(0);
+	p->kconst.phys_offset = PHYS_OFFSET;
+	p->kconst.page_offset = PAGE_OFFSET;
+	p->kconst.va_bits = VA_BITS;
+	p->kconst.kimage_vaddr = kimage_vaddr;
+	p->kconst.kimage_voffset = kimage_voffset;
 
 	return 0;
 }
@@ -385,9 +397,6 @@ int sec_debug_is_modem_seperate_debug_ssr(void)
 int summary_set_task_info(struct sec_debug_summary_data_apss *apss)
 {
 	extern struct task_struct init_task;
-#ifdef CONFIG_RKP_CFP_ROPP_SYSREGKEY
-	extern unsigned long ropp_master_key;
-#endif
 
 	apss->task.stack_size = THREAD_SIZE;
 	apss->task.start_sp = THREAD_START_SP;
@@ -396,14 +405,19 @@ int summary_set_task_info(struct sec_debug_summary_data_apss *apss)
 	apss->task.irq_stack.start_sp = IRQ_STACK_START_SP;
 
 	apss->task.ti.struct_size = sizeof(struct thread_info);
+	SET_MEMBER_TYPE_INFO(&apss->task.ti.flags, struct thread_info, flags);
 	SET_MEMBER_TYPE_INFO(&apss->task.ti.task, struct thread_info, task);
+	SET_MEMBER_TYPE_INFO(&apss->task.ti.cpu, struct thread_info, cpu);
 #ifdef CONFIG_RKP_CFP_ROPP
 	SET_MEMBER_TYPE_INFO(&apss->task.ti.rrk, struct thread_info, rrk);
 #endif
 
 	apss->task.ts.struct_size = sizeof(struct task_struct);
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.state, struct task_struct, state);
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.exit_state, struct task_struct, exit_state);
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.stack, struct task_struct, stack);
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.flags, struct task_struct, flags);
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.on_cpu, struct task_struct, on_cpu);
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.pid, struct task_struct, pid);
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.comm, struct task_struct, comm);
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.tasks_next, struct task_struct, tasks.next);
@@ -412,19 +426,37 @@ int summary_set_task_info(struct sec_debug_summary_data_apss *apss)
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.sp, struct task_struct, thread.cpu_context.sp);
 	SET_MEMBER_TYPE_INFO(&apss->task.ts.pc, struct task_struct, thread.cpu_context.pc);
 
-	apss->task.init_task_pa = __pa(&init_task);
+#ifdef CONFIG_SCHED_INFO
+	/* sched_info */
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.sched_info__pcount, struct task_struct, sched_info.pcount);
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.sched_info__run_delay, struct task_struct, sched_info.run_delay);
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.sched_info__last_arrival, struct task_struct, sched_info.last_arrival);
+	SET_MEMBER_TYPE_INFO(&apss->task.ts.sched_info__last_queued, struct task_struct, sched_info.last_queued);
+#endif
+
+	apss->task.init_task = (uint64_t)&init_task;
 #ifdef CONFIG_RKP_CFP_ROPP_SYSREGKEY
-	apss->task.ropp.master_key_pa = __pa(&ropp_master_key);
-	apss->task.ropp.master_key_val = ropp_master_key;
 	apss->task.ropp.magic = 0x50504F52;
 #else
-	apss->task.ropp.master_key_pa = 0x0;
-	apss->task.ropp.master_key_val = 0x0;
 	apss->task.ropp.magic = 0x0;
 #endif
 
 	return 0;
 }
+
+#ifdef CONFIG_MSM_PM
+void summary_set_lpm_info_cci(uint64_t paddr)
+{
+	if (secdbg_apss) {
+		pr_info("%s : 0x%llx\n", __func__, paddr);
+		secdbg_apss->aplpm.p_cci = paddr;
+	}
+}
+#else
+void summary_set_lpm_info_cci(uint64_t phy_addr)
+{
+}
+#endif
 
 int __init sec_debug_summary_init(void)
 {
@@ -500,7 +532,10 @@ int __init sec_debug_summary_init(void)
 	sec_debug_summary_set_rtb_info(secdbg_apss);
 
 	summary_set_task_info(secdbg_apss);
-		
+
+	summary_set_lpm_info_cluster(secdbg_apss);
+	summary_set_lpm_info_runqueues(secdbg_apss);
+
 	/* fill magic nubmer last to ensure data integrity when the magic
 	 * numbers are written
 	 */

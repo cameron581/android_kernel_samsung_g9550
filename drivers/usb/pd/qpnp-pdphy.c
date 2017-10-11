@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,6 +34,7 @@
 #define USB_PDPHY_MSG_CONFIG		0x40
 #define MSG_CONFIG_PORT_DATA_ROLE	BIT(3)
 #define MSG_CONFIG_PORT_POWER_ROLE	BIT(2)
+#define MSG_CONFIG_SPEC_REV_MASK	(BIT(1) | BIT(0))
 
 #define USB_PDPHY_EN_CONTROL		0x46
 #define CONTROL_ENABLE			BIT(0)
@@ -244,9 +245,12 @@ void pdphy_enable_irq(struct usb_pdphy *pdphy, bool enable)
 	if (enable) {
 		enable_irq(pdphy->sig_tx_irq);
 		enable_irq(pdphy->sig_rx_irq);
+		enable_irq_wake(pdphy->sig_rx_irq);
 		enable_irq(pdphy->msg_tx_irq);
-		if (!pdphy->in_test_data_mode)
+		if (!pdphy->in_test_data_mode) {
 			enable_irq(pdphy->msg_rx_irq);
+			enable_irq_wake(pdphy->msg_rx_irq);
+		}
 		enable_irq(pdphy->msg_tx_failed_irq);
 		enable_irq(pdphy->msg_tx_discarded_irq);
 		enable_irq(pdphy->msg_rx_discarded_irq);
@@ -255,9 +259,12 @@ void pdphy_enable_irq(struct usb_pdphy *pdphy, bool enable)
 
 	disable_irq(pdphy->sig_tx_irq);
 	disable_irq(pdphy->sig_rx_irq);
+	disable_irq_wake(pdphy->sig_rx_irq);
 	disable_irq(pdphy->msg_tx_irq);
-	if (!pdphy->in_test_data_mode)
+	if (!pdphy->in_test_data_mode) {
 		disable_irq(pdphy->msg_rx_irq);
+		disable_irq_wake(pdphy->msg_rx_irq);
+	}
 	disable_irq(pdphy->msg_tx_failed_irq);
 	disable_irq(pdphy->msg_tx_discarded_irq);
 	disable_irq(pdphy->msg_rx_discarded_irq);
@@ -325,6 +332,16 @@ int pd_phy_update_roles(enum data_role dr, enum power_role pr)
 		((dr == DR_DFP ? MSG_CONFIG_PORT_DATA_ROLE : 0) |
 		 (pr == PR_SRC ? MSG_CONFIG_PORT_POWER_ROLE : 0)));
 }
+EXPORT_SYMBOL(pd_phy_update_roles);
+
+int pd_phy_update_spec_rev(enum pd_spec_rev rev)
+{
+	struct usb_pdphy *pdphy = __pdphy;
+
+	return pdphy_masked_write(pdphy, USB_PDPHY_MSG_CONFIG,
+			MSG_CONFIG_SPEC_REV_MASK, rev);
+}
+EXPORT_SYMBOL(pd_phy_update_spec_rev);
 
 int pd_phy_open(struct pd_phy_params *params)
 {
@@ -357,6 +374,10 @@ int pd_phy_open(struct pd_phy_params *params)
 
 	/* update data and power role to be used in GoodCRC generation */
 	ret = pd_phy_update_roles(pdphy->data_role, pdphy->power_role);
+	if (ret)
+		return ret;
+
+	ret = pd_phy_update_spec_rev(params->spec_rev);
 	if (ret)
 		return ret;
 

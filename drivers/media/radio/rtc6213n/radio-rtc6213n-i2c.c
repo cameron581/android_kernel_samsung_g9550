@@ -127,8 +127,13 @@ int rtc6213n_set_register(struct rtc6213n_device *radio, int regnr)
 	for (i = 0; i < WRITE_REG_NUM; i++)
 		buf[i] = __cpu_to_be16(radio->registers[WRITE_INDEX(i)]);
 
-	if (i2c_transfer(radio->client->adapter, msgs, 1) != 1)
+	if (i2c_transfer(radio->client->adapter, msgs, 1) != 1) {		
+		for (i = 0; i < WRITE_REG_NUM; i++) {
+			dev_err(&radio->videodev->dev, " rtc6213n_set_register buf[%d] = %d\n",
+						i, buf[i]);
+		}
 		return -EIO;
+	}
 
 	return 0;
 }
@@ -149,8 +154,13 @@ int rtc6213n_set_serial_registers(struct rtc6213n_device *radio,
 	for (i = 0; i < bytes; i++)
 		buf[i] = __cpu_to_be16(data[i]);
 
-	if (i2c_transfer(radio->client->adapter, msgs, 1) != 1)
+	if (i2c_transfer(radio->client->adapter, msgs, 1) != 1) {
+		for (i = 0; i < 46; i++) {
+			dev_err(&radio->videodev->dev, " rtc6213n_set_serial_registers buf[%d] = %d\n",
+						i, buf[i]);
+		}
 		return -EIO;
+	}
 
 	return 0;
 }
@@ -348,6 +358,8 @@ static irqreturn_t rtc6213n_i2c_interrupt(int irq, void *dev_id)
 	unsigned char tmpbuf[3];
 	int retval = 0;
 
+	dev_info(&radio->videodev->dev, "rtc6213n_i2c_interrupt\n");
+
 	/* check Seek/Tune Complete */
 	retval = rtc6213n_get_register(radio, STATUS);
 	if (retval < 0)
@@ -443,7 +455,7 @@ static irqreturn_t rtc6213n_i2c_interrupt(int irq, void *dev_id)
 		wake_up_interruptible(&radio->read_queue);
 
 end:
-
+	dev_info(&radio->videodev->dev, "rtc6213n_i2c_interrupt end\n");
 	return IRQ_HANDLED;
 }
 
@@ -457,6 +469,8 @@ static int rtc6213n_i2c_probe(struct i2c_client *client,
 	int retval = 0;
 	int fmint_gpio = 0;
 	int irq;
+	u32 data[VOLUME_NUM];
+	int i;
 	struct v4l2_device *v4l2_dev;
 
 	/* private data allocation and initialization */
@@ -535,6 +549,21 @@ static int rtc6213n_i2c_probe(struct i2c_client *client,
 		dev_err(&client->dev, "%s: cannot map gpio to irq\n",
 			__func__);
 	}
+
+	if (of_property_read_bool(client->dev.of_node, "volume_db")) {
+		dev_info(&client->dev, "%s: use fm radio volume db\n", __func__);
+		radio->vol_db = true;
+	} else
+		radio->vol_db = false;
+
+	if (!of_property_read_u32_array(client->dev.of_node, "radio_vol", data, VOLUME_NUM)) {
+		for (i = 0; i < VOLUME_NUM; i++) {
+			radio->rx_vol[i] = (~data[i]) + 1;
+			dev_info(&client->dev, "%s: rx_vol = %d\n", __func__,
+				radio->rx_vol[i]);
+		}
+	} else
+		dev_info(&client->dev, "%s: can not find the volume in the dt\n", __func__);
 
 	/* mark Seek/Tune Complete Interrupt enabled */
 	radio->stci_enabled = true;

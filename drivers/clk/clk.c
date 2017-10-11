@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2010-2011 Canonical Ltd <jeremy.kerr@canonical.com>
  * Copyright (C) 2011-2012 Linaro Ltd <mturquette@linaro.org>
- * Copyright (c) 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -71,6 +71,8 @@ struct clk_core {
 	bool			orphan;
 	unsigned int		enable_count;
 	unsigned int		prepare_count;
+	bool			need_handoff_enable;
+	bool			need_handoff_prepare;
 	unsigned long		min_rate;
 	unsigned long		max_rate;
 	unsigned long		accuracy;
@@ -186,6 +188,9 @@ static bool clk_core_is_enabled(struct clk_core *core)
 	return core->ops->is_enabled(core->hw);
 }
 
+static void clk_core_unprepare(struct clk_core *core);
+static void clk_core_disable(struct clk_core *core);
+
 static void clk_unprepare_unused_subtree(struct clk_core *core)
 {
 	struct clk_core *child;
@@ -194,6 +199,19 @@ static void clk_unprepare_unused_subtree(struct clk_core *core)
 
 	hlist_for_each_entry(child, &core->children, child_node)
 		clk_unprepare_unused_subtree(child);
+
+	/*
+	 * setting CLK_ENABLE_HAND_OFF flag triggers this conditional
+	 *
+	 * need_handoff_prepare implies this clk was already prepared by
+	 * __clk_init. now we have a proper user, so unset the flag in our
+	 * internal bookkeeping. See CLK_ENABLE_HAND_OFF flag in clk-provider.h
+	 * for details.
+	 */
+	if (core->need_handoff_prepare) {
+		core->need_handoff_prepare = false;
+		clk_core_unprepare(core);
+	}
 
 	if (core->prepare_count)
 		return;
@@ -220,6 +238,21 @@ static void clk_disable_unused_subtree(struct clk_core *core)
 
 	hlist_for_each_entry(child, &core->children, child_node)
 		clk_disable_unused_subtree(child);
+
+	/*
+	 * setting CLK_ENABLE_HAND_OFF flag triggers this conditional
+	 *
+	 * need_handoff_enable implies this clk was already enabled by
+	 * __clk_init. now we have a proper user, so unset the flag in our
+	 * internal bookkeeping. See CLK_ENABLE_HAND_OFF flag in clk-provider.h
+	 * for details.
+	 */
+	if (core->need_handoff_enable) {
+		core->need_handoff_enable = false;
+		flags = clk_enable_lock();
+		clk_core_disable(core);
+		clk_enable_unlock(flags);
+	}
 
 	flags = clk_enable_lock();
 
@@ -656,7 +689,7 @@ static int clk_update_vdd(struct clk_vdd_class *vdd_class)
 		pr_debug("Set Voltage level Min %d, Max %d\n", uv[new_base + i],
 				uv[max_lvl + i]);
 		rc = regulator_set_voltage(r[i], uv[new_base + i],
-				uv[max_lvl + i]);
+			vdd_class->use_max_uV ? INT_MAX : uv[max_lvl + i]);
 		if (rc)
 			goto set_voltage_fail;
 
@@ -677,11 +710,13 @@ static int clk_update_vdd(struct clk_vdd_class *vdd_class)
 	return rc;
 
 enable_disable_fail:
-	regulator_set_voltage(r[i], uv[cur_base + i], uv[max_lvl + i]);
+	regulator_set_voltage(r[i], uv[cur_base + i],
+			vdd_class->use_max_uV ? INT_MAX : uv[max_lvl + i]);
 
 set_voltage_fail:
 	for (i--; i >= 0; i--) {
-		regulator_set_voltage(r[i], uv[cur_base + i], uv[max_lvl + i]);
+		regulator_set_voltage(r[i], uv[cur_base + i],
+		       vdd_class->use_max_uV ? INT_MAX : uv[max_lvl + i]);
 		if (cur_lvl == 0 || cur_lvl == vdd_class->num_levels)
 			regulator_disable(r[i]);
 		else if (level == 0)
@@ -791,6 +826,9 @@ static bool clk_is_rate_level_valid(struct clk_core *core, unsigned long rate)
 static int clk_vdd_class_init(struct clk_vdd_class *vdd)
 {
 	struct clk_handoff_vdd *v;
+
+	if (vdd->skip_handoff)
+		return 0;
 
 	list_for_each_entry(v, &clk_handoff_vdd_list, list) {
 		if (v->vdd_class == vdd)
@@ -920,7 +958,7 @@ static int clk_core_prepare(struct clk_core *core)
  */
 int clk_prepare(struct clk *clk)
 {
-	int ret;
+	int ret = 0;
 
 	if (!clk)
 		return 0;
@@ -1035,7 +1073,7 @@ static int clk_core_enable(struct clk_core *core)
 int clk_enable(struct clk *clk)
 {
 	unsigned long flags;
-	int ret;
+	int ret = 0;
 
 	if (!clk)
 		return 0;
@@ -2496,7 +2534,46 @@ do {							\
 		pr_info(fmt, ##__VA_ARGS__);		\
 } while (0)
 
-int clock_debug_print_clock(struct clk_core *c, struct seq_file *s)
+/*
+ * clock_debug_print_enabled_debug_suspend() - Print names of enabled clocks
+ * during suspend.
+ */
+static void clock_debug_print_enabled_debug_suspend(struct seq_file *s)
+{
+	struct clk_core *core;
+	int cnt = 0;
+
+	if (!mutex_trylock(&clk_debug_lock))
+		return;
+
+	clock_debug_output(s, 0, "Enabled clocks:\n");
+
+	hlist_for_each_entry(core, &clk_debug_list, debug_node) {
+		if (!core || !core->prepare_count)
+			continue;
+
+		if (core->vdd_class)
+			clock_debug_output(s, 0, " %s:%u:%u [%ld, %d]",
+					core->name, core->prepare_count,
+					core->enable_count, core->rate,
+					clk_find_vdd_level(core, core->rate));
+
+		else
+			clock_debug_output(s, 0, " %s:%u:%u [%ld]",
+					core->name, core->prepare_count,
+					core->enable_count, core->rate);
+		cnt++;
+	}
+
+	mutex_unlock(&clk_debug_lock);
+
+	if (cnt)
+		clock_debug_output(s, 0, "Enabled clock count: %d\n", cnt);
+	else
+		clock_debug_output(s, 0, "No clocks enabled.\n");
+}
+
+static int clock_debug_print_clock(struct clk_core *c, struct seq_file *s)
 {
 	char *start = "";
 	struct clk *clk;
@@ -2572,7 +2649,7 @@ static const struct file_operations clk_enabled_list_fops = {
 	.release	= seq_release,
 };
 
-static void clk_debug_print_hw(struct clk_core *clk, struct seq_file *f)
+void clk_debug_print_hw(struct clk_core *clk, struct seq_file *f)
 {
 	if (IS_ERR_OR_NULL(clk))
 		return;
@@ -2586,6 +2663,7 @@ static void clk_debug_print_hw(struct clk_core *clk, struct seq_file *f)
 
 	clk->ops->list_registers(f, clk->hw);
 }
+EXPORT_SYMBOL(clk_debug_print_hw);
 
 static int print_hw_show(struct seq_file *m, void *unused)
 {
@@ -2796,6 +2874,8 @@ static int clk_debug_create_one(struct clk_core *core, struct dentry *pdentry)
 			goto err_out;
 	}
 
+	clk_debug_measure_add(core->hw, core->dentry);
+
 	ret = 0;
 	goto out;
 
@@ -2870,7 +2950,7 @@ void clock_debug_print_enabled(void)
 	if (likely(!debug_suspend))
 		return;
 
-	clock_debug_print_enabled_clocks(NULL);
+	clock_debug_print_enabled_debug_suspend(NULL);
 }
 EXPORT_SYMBOL_GPL(clock_debug_print_enabled);
 
@@ -2925,8 +3005,10 @@ static int __init clk_debug_init(void)
 		return -ENOMEM;
 
 	mutex_lock(&clk_debug_lock);
-	hlist_for_each_entry(core, &clk_debug_list, debug_node)
+	hlist_for_each_entry(core, &clk_debug_list, debug_node) {
+		clk_register_debug(core->hw, core->dentry);
 		clk_debug_create_one(core, rootdir);
+	}
 
 	inited = 1;
 	mutex_unlock(&clk_debug_lock);
@@ -3135,6 +3217,37 @@ static int __clk_init(struct device *dev, struct clk *clk_user)
 		flags = clk_enable_lock();
 		clk_core_enable(core);
 		clk_enable_unlock(flags);
+	}
+
+	/*
+	 * enable clocks with the CLK_ENABLE_HAND_OFF flag set
+	 *
+	 * This flag causes the framework to enable the clock at registration
+	 * time, which is sometimes necessary for clocks that would cause a
+	 * system crash when gated (e.g. cpu, memory, etc). The prepare_count
+	 * is migrated over to the first clk consumer to call clk_prepare().
+	 * Similarly the clk's enable_count is migrated to the first consumer
+	 * to call clk_enable().
+	 */
+	if (core->flags & CLK_ENABLE_HAND_OFF) {
+		unsigned long flags;
+
+		/*
+		 * Few clocks might have hardware gating which would be required
+		 * to be ON before prepare/enabling the clocks. So check if the
+		 * clock has been turned ON earlier and we should
+		 * prepare/enable those clocks.
+		 */
+		if (clk_core_is_enabled(core)) {
+			core->need_handoff_prepare = true;
+			core->need_handoff_enable = true;
+			ret = clk_core_prepare(core);
+			if (ret)
+				goto out;
+			flags = clk_enable_lock();
+			clk_core_enable(core);
+			clk_enable_unlock(flags);
+		}
 	}
 
 	kref_init(&core->ref);

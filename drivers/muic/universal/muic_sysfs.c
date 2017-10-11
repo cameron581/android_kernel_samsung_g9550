@@ -48,6 +48,7 @@
 #include "muic_debug.h"
 #include "muic_apis.h"
 #include "muic_regmap.h"
+#include "muic_regmap_sm5720.h"
 #if defined(CONFIG_MUIC_HV)
 #include "muic_hv.h"
 #endif
@@ -185,6 +186,27 @@ static ssize_t muic_set_usb_sel(struct device *dev,
 
 	pr_info("%s:%s usb_path(%d)\n", MUIC_DEV_NAME, __func__,
 			pdata->usb_path);
+
+	return count;
+}
+
+static ssize_t muic_do_reset(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	muic_data_t *pmuic = dev_get_drvdata(dev);
+	int uattr, value, ret;
+
+	pr_info("%s:%s muic_do_reset\n", MUIC_DEV_NAME, __func__);
+
+	uattr = RESET_RESET;
+	value = 1;
+	ret = regmap_write_value(pmuic->regmapdesc, uattr, value);
+
+	if (ret < 0)
+		pr_err("%s Reset reg write fail.\n", __func__);
+	else
+		_REGMAP_TRACE(pmuic->regmapdesc, 'w', ret, uattr, value);
 
 	return count;
 }
@@ -471,6 +493,15 @@ static ssize_t muic_show_attached_dev(struct device *dev,
 		return sprintf(buf, "OTG\n");
 	case ATTACHED_DEV_TA_MUIC:
 		return sprintf(buf, "TA\n");
+	case ATTACHED_DEV_AFC_CHARGER_PREPARE_MUIC:
+	case ATTACHED_DEV_AFC_CHARGER_PREPARE_DUPLI_MUIC:
+	case ATTACHED_DEV_AFC_CHARGER_5V_DUPLI_MUIC:
+		return sprintf(buf, "AFC Communication\n");
+	case ATTACHED_DEV_AFC_CHARGER_5V_MUIC:
+	case ATTACHED_DEV_AFC_CHARGER_9V_MUIC:
+	case ATTACHED_DEV_QC_CHARGER_5V_MUIC:
+	case ATTACHED_DEV_QC_CHARGER_9V_MUIC:
+		return sprintf(buf, "AFC Charger\n");
 	case ATTACHED_DEV_JIG_UART_OFF_MUIC:
 		return sprintf(buf, "JIG UART OFF\n");
 	case ATTACHED_DEV_JIG_UART_OFF_VB_MUIC:
@@ -899,6 +930,9 @@ static DEVICE_ATTR(afc_set_voltage, 0664,
 		NULL, muic_store_afc_set_voltage);
 #endif
 #endif
+static DEVICE_ATTR(muic_reset, 0664,
+		NULL, muic_do_reset);
+
 
 static struct attribute *muic_attributes[] = {
 #if defined(CONFIG_MUIC_SUPPORT_CCIC)
@@ -937,6 +971,7 @@ static struct attribute *muic_attributes[] = {
 	&dev_attr_hv_sel.attr,
 #endif
 #endif
+	&dev_attr_muic_reset.attr,
 	NULL
 };
 

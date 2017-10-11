@@ -52,7 +52,7 @@ struct knox_socket_metadata {
 /* The destination address of the socket */
     char dstaddr[INET_ADDRSTRLEN];
 /* The name of the process which created the socket */
-    char process_name[TASK_COMM_LEN];
+    char process_name[128];
 /* The name of the parent process which created the socket */
     char parent_process_name[TASK_COMM_LEN];
 /*  The Domain name associated with the ip address of the socket. The size needs to be in sync with the userspace implementation */
@@ -88,7 +88,7 @@ struct knox_user_socket_metadata {
 /* The destination address of the socket */
     char dstaddr[INET_ADDRSTRLEN];
 /* The name of the process which created the socket */
-    char process_name[TASK_COMM_LEN];
+    char process_name[128];
 /* The name of the parent process which created the socket */
     char parent_process_name[TASK_COMM_LEN];
 /*  The Domain name associated with the ip address of the socket. The size needs to be in sync with the userspace implementation */

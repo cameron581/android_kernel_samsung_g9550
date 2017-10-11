@@ -5,6 +5,10 @@
 #include <linux/muic/muic_notifier.h>
 #include <linux/sec_class.h>
 
+#if defined(CONFIG_SWITCH)
+#include <linux/switch.h>
+#endif /* CONFIG_SWITCH */
+
 /*
   * The src & dest addresses of the noti.
   * keep the same value defined in ccic_notifier.h
@@ -110,6 +114,13 @@ static int muic_notifier_notify(void)
 
 	pr_info("%s: CMD=%d, DATA=%d\n", __func__, muic_notifier.cxt.attach,
 			muic_notifier.cxt.cable_type);
+
+#if defined(CONFIG_SEC_FACTORY)
+	if (muic_notifier.cxt.attach != 0)
+		muic_send_attached_muic_cable_intent(muic_notifier.cxt.cable_type);
+	else
+		muic_send_attached_muic_cable_intent(0);
+#endif
 
 	pcxt = muic_uses_new_noti ? &(muic_notifier.cxt) : \
 			(void *)&(muic_notifier.attached_dev);

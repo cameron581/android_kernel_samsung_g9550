@@ -551,6 +551,8 @@ asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 	const struct fault_info *inf = fault_info + (esr & 63);
 	struct siginfo info;
 
+	sec_debug_save_fault_info(esr, inf->name, addr, 0UL);
+
 	if (!inf->fn(addr, esr, regs))
 		return;
 
@@ -579,6 +581,9 @@ asmlinkage void __exception do_sp_pc_abort(unsigned long addr,
 				    tsk->comm, task_pid_nr(tsk),
 				    esr_get_class_string(esr), (void *)regs->pc,
 				    (void *)regs->sp);
+
+	sec_debug_save_fault_info(esr, esr_get_class_string(esr),
+			(unsigned long)regs->pc, (unsigned long)regs->sp);
 
 	info.si_signo = SIGBUS;
 	info.si_errno = 0;
@@ -624,6 +629,8 @@ asmlinkage int __exception do_debug_exception(unsigned long addr,
 {
 	const struct fault_info *inf = debug_fault_info + DBG_ESR_EVT(esr);
 	struct siginfo info;
+
+	sec_debug_save_fault_info(esr, inf->name, addr, 0UL);
 
 	if (!inf->fn(addr, esr, regs))
 		return 1;

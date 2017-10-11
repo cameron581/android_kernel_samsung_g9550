@@ -75,6 +75,11 @@ enum {
 };
 
 enum {
+	SS_FAST_VBUS_10mA_per_ms = 0x0,
+	SS_FAST_VBUS_5mA_per_ms = 0x1,
+};
+
+enum {
 	PRECHG_CURRENT_450mA    = 0x0,
 	PRECHG_CURRENT_650mA    = 0x1,
 };
@@ -218,6 +223,7 @@ struct sm5720_charger_data {
 	struct wake_lock afc_wake_lock;
 	struct wake_lock aicl_wake_lock;
 	struct wake_lock sysovlo_wake_lock;
+	struct wake_lock otg_wake_lock;
 
 	/* for charging operation handling */
 	int charge_mode;

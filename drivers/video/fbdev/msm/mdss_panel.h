@@ -121,6 +121,11 @@ enum {
 #endif
 
 enum {
+	MDSS_PANEL_LOW_PERSIST_MODE_OFF = 0,
+	MDSS_PANEL_LOW_PERSIST_MODE_ON,
+};
+
+enum {
 	MODE_GPIO_NOT_VALID = 0,
 	MODE_SEL_DUAL_PORT,
 	MODE_SEL_SINGLE_PORT,
@@ -263,6 +268,10 @@ struct mdss_intf_recovery {
  *				Argument provided is bits per pixel (8/10/12)
  * @MDSS_EVENT_UPDATE_PANEL_PPM: update pixel clock by input PPM.
  *				Argument provided is parts per million.
+ * @MDSS_EVENT_AVR_MODE: Setup DSI Video mode to support AVR based on the
+ *			avr mode passed as argument
+ *			0 - disable AVR support
+ *			1 - enable AVR support
  */
 enum mdss_intf_events {
 	MDSS_EVENT_RESET = 1,
@@ -296,10 +305,13 @@ enum mdss_intf_events {
 	MDSS_EVENT_DEEP_COLOR,
 	MDSS_EVENT_DISABLE_PANEL,
 	MDSS_EVENT_UPDATE_PANEL_PPM,
+	MDSS_EVENT_DSI_TIMING_DB_CTRL,
+	MDSS_EVENT_AVR_MODE,
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 	MDSS_SAMSUNG_EVENT_START,
 	MDSS_SAMSUNG_EVENT_FRAME_UPDATE,
 	MDSS_SAMSUNG_EVENT_FB_EVENT_CALLBACK,
+	MDSS_SAMSUNG_EVENT_PANEL_RECOVERY,
 	MDSS_SAMSUNG_EVENT_PANEL_ESD_RECOVERY,
 	MDSS_SAMSUNG_EVENT_MULTI_RESOLUTION,
 	MDSS_SAMSUNG_EVENT_MAX,
@@ -507,6 +519,8 @@ struct mipi_panel_info {
 	char insert_dcs_cmd;
 	char wr_mem_continue;
 	char wr_mem_start;
+	char wr_sidemem_continue;
+	char wr_sidemem_start;
 	char te_sel;
 	char stream;	/* 0 or 1 */
 	char mdp_trigger;
@@ -759,6 +773,8 @@ struct mdss_panel_hdr_properties {
 
 	/* peak brightness supported by panel */
 	u32 peak_brightness;
+	/* average brightness supported by panel */
+	u32 avg_brightness;
 	/* Blackness level supported by panel */
 	u32 blackness_level;
 };
@@ -832,7 +848,7 @@ struct mdss_panel_info {
 	int panel_power_state;
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 	int blank_state;
-#endif 
+#endif
 	int compression_mode;
 
 	uint32_t panel_dead;
@@ -908,6 +924,9 @@ struct mdss_panel_info {
 	/* debugfs structure for the panel */
 	struct mdss_panel_debugfs_info *debugfs_info;
 
+	/* persistence mode on/off */
+	bool persist_mode;
+
 	/* stores initial adaptive variable refresh vtotal value */
 	u32 saved_avr_vtotal;
 
@@ -955,6 +974,7 @@ struct mdss_panel_timing {
 struct mdss_panel_data {
 	struct mdss_panel_info panel_info;
 	void (*set_backlight) (struct mdss_panel_data *pdata, u32 bl_level);
+	int (*apply_display_setting)(struct mdss_panel_data *pdata, u32 mode);
 	unsigned char *mmss_cc_base;
 
 	/**

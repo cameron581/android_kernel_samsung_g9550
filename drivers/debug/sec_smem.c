@@ -35,25 +35,85 @@ extern void* clk_osm_get_log_addr(void);
 
 static ap_health_t *p_health;
 
-static char* lpddr4_manufacture_name[MAX_DDR_VENDOR] =
-	{"NA",
-	"SEC"/* Samsung */,
-	"NA",
-	"NA",
-	"NA",
-	"NAN" /* Nanya */,
-	"HYN" /* SK hynix */,
-	"NA",
-	"WIN" /* Winbond */,
-	"ESM" /* ESMT */,
-	"NA",
-	"NA",
-	"NA",
-	"NA",
-	"NA",
-	"MIC" /* Micron */,};
+/*
+ * CONFIG_SAMSUNG_BSP
+ *
+ * LPDDR4(JESD209-4) Manufacturer ID
+ *
+ * JC-42.6 Manufacturer Identification
+ * (ID) Code for Low Power Memories
+ * (JEP166B)
+ *
+ *  0000 0000B : Reserved
+ *  0000 0001B : Samsung
+ *  0000 0010B : Reserved*
+ *  0000 0011B : Reserved*
+ *  0000 0100B : Reserved*
+ *  0000 0101B : Nanya
+ *  0000 0110B : SK hynix
+ *  0000 0111B : Reserved*
+ *  0000 1000B : Winbond
+ *  0000 1001B : ESMT
+ *  0000 1010B : Reserved
+ *  0000 1011B : Reserved*
+ *  0000 1100B : Reserved*
+ *  0000 1101B : Reserved*
+ *  0000 1110B : Reserved*
+ *  0000 1111B : Reserved*
+ *  0001 0010B : Reserved*
+ *  0001 0011B : Reserved
+ *  0001 1011B : Reserved*
+ *  0001 1100B : Reserved*
+ *  1010 1010B : Reserved*
+ *  1100 0010B : Reserved*
+ *  1111 1000B : Fidelix
+ *  1111 1100B : Reserved*
+ *  1111 1101B : AP Memory
+ *  1111 1110B : Reserved*
+ *  1111 1111B : Micron
+ *  All others : Reserved
+ *
+ */
+
+typedef enum
+{
+  LP4_SAMSUNG = 0x1,
+  LP4_NANYA = 0x5,
+  LP4_HYNIX = 0x6,
+  LP4_WINBOND = 0x8,
+  LP4_ESMT = 0x9,
+  LP4_FIDELIX = 0xF8,
+  LP4_APMEMORY = 0xFD,
+  LP4_MICRON = 0xFF,
+} LPDDR4_DDR_MANUFACTURES;
+
+static char* lpddr4_manufacture_name[] =
+{ [LP4_SAMSUNG] = "SEC", [LP4_NANYA] = "NAN", [LP4_HYNIX] = "HYP",
+  [LP4_WINBOND] = "WIN", [LP4_ESMT] = "ESM", [LP4_FIDELIX] = "FID",
+  [LP4_APMEMORY] = "APM", [LP4_MICRON] = "MIC"};
 
 char* get_ddr_vendor_name(void)
+{
+	unsigned size;
+	sec_smem_id_vendor0_v2_t *vendor0 = NULL;
+
+	vendor0 = smem_get_entry(SMEM_ID_VENDOR0, &size,
+					SMEM_APPS, SMEM_ANY_HOST_FLAG);
+
+	if (!vendor0 || !size) {
+		pr_err("%s: unable to read smem entry\n", __func__);
+		return "NA";
+	}
+
+	if (lpddr4_manufacture_name[vendor0->ddr_vendor & 0xFF]) {
+		return lpddr4_manufacture_name[vendor0->ddr_vendor & 0xFF];
+	} else {
+		return "NA";
+	}
+}
+EXPORT_SYMBOL(get_ddr_vendor_name);
+
+uint8_t get_ddr_revision_id_1(void)
 {
 	unsigned size;
 	sec_smem_id_vendor0_v2_t *vendor0 = NULL;
@@ -66,9 +126,43 @@ char* get_ddr_vendor_name(void)
 		return 0;
 	}
 
-	return lpddr4_manufacture_name[vendor0->ddr_vendor & 0x0F];
+	return (vendor0->ddr_vendor >> 8) & 0xFF;
 }
-EXPORT_SYMBOL(get_ddr_vendor_name);
+EXPORT_SYMBOL(get_ddr_revision_id_1);
+
+uint8_t get_ddr_revision_id_2(void)
+{
+	unsigned size;
+	sec_smem_id_vendor0_v2_t *vendor0 = NULL;
+
+	vendor0 = smem_get_entry(SMEM_ID_VENDOR0, &size,
+					SMEM_APPS, SMEM_ANY_HOST_FLAG);
+
+	if (!vendor0 || !size) {
+		pr_err("%s: unable to read smem entry\n", __func__);
+		return 0;
+	}
+
+	return (vendor0->ddr_vendor >> 16) & 0xFF;
+}
+EXPORT_SYMBOL(get_ddr_revision_id_2);
+
+uint8_t get_ddr_total_density(void)
+{
+	unsigned size;
+	sec_smem_id_vendor0_v2_t *vendor0 = NULL;
+
+	vendor0 = smem_get_entry(SMEM_ID_VENDOR0, &size,
+					SMEM_APPS, SMEM_ANY_HOST_FLAG);
+
+	if (!vendor0 || !size) {
+		pr_err("%s: unable to read smem entry\n", __func__);
+		return 0;
+	}
+
+	return (vendor0->ddr_vendor >> 24) & 0xFF;
+}
+EXPORT_SYMBOL(get_ddr_total_density);
 
 uint32_t get_ddr_DSF_version(void)
 {

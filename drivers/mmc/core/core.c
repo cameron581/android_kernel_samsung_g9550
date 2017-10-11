@@ -464,6 +464,22 @@ out:
 }
 EXPORT_SYMBOL(mmc_clk_update_freq);
 
+void mmc_recovery_fallback_lower_speed(struct mmc_host *host)
+{
+	if (!host->card)
+		return;
+
+	if (host->sdr104_wa && mmc_card_sd(host->card) &&
+	    (host->ios.timing == MMC_TIMING_UHS_SDR104) &&
+	    !host->card->sdr104_blocked) {
+		pr_err("%s: %s: blocked SDR104, lower the bus-speed (SDR50 / DDR50)\n",
+			mmc_hostname(host), __func__);
+		mmc_host_clear_sdr104(host);
+		mmc_hw_reset(host);
+		host->card->sdr104_blocked = true;
+	}
+}
+
 static int mmc_devfreq_set_target(struct device *dev,
 				unsigned long *freq, u32 devfreq_flags)
 {
@@ -510,6 +526,9 @@ static int mmc_devfreq_set_target(struct device *dev,
 	if (abort)
 		goto out;
 
+	if (mmc_card_sd(host->card) && host->card->sdr104_blocked)
+		goto rel_host;
+
 	/*
 	 * In case we were able to claim host there is no need to
 	 * defer the frequency change. It will be done now
@@ -518,15 +537,18 @@ static int mmc_devfreq_set_target(struct device *dev,
 
 	mmc_host_clk_hold(host);
 	err = mmc_clk_update_freq(host, *freq, clk_scaling->state);
-	if (err && err != -EAGAIN)
+	if (err && err != -EAGAIN) {
 		pr_err("%s: clock scale to %lu failed with error %d\n",
 			mmc_hostname(host), *freq, err);
-	else
+		mmc_recovery_fallback_lower_speed(host);
+	} else {
 		pr_debug("%s: clock change to %lu finished successfully (%s)\n",
 			mmc_hostname(host), *freq, current->comm);
+	}
 
 
 	mmc_host_clk_release(host);
+rel_host:
 	mmc_release_host(host);
 out:
 	return err;
@@ -545,6 +567,9 @@ void mmc_deferred_scaling(struct mmc_host *host)
 	int err;
 
 	if (!host->clk_scaling.enable)
+		return;
+
+	if (mmc_card_sd(host->card) && host->card->sdr104_blocked)
 		return;
 
 	spin_lock_bh(&host->clk_scaling.lock);
@@ -567,13 +592,15 @@ void mmc_deferred_scaling(struct mmc_host *host)
 
 	err = mmc_clk_update_freq(host, target_freq,
 		host->clk_scaling.state);
-	if (err && err != -EAGAIN)
+	if (err && err != -EAGAIN) {
 		pr_err("%s: failed on deferred scale clocks (%d)\n",
 			mmc_hostname(host), err);
-	else
+		mmc_recovery_fallback_lower_speed(host);
+	} else {
 		pr_debug("%s: clocks were successfully scaled to %lu (%s)\n",
 			mmc_hostname(host),
 			target_freq, current->comm);
+	}
 	host->clk_scaling.clk_scaling_in_progress = false;
 	atomic_dec(&host->clk_scaling.devfreq_abort);
 }
@@ -589,17 +616,39 @@ static int mmc_devfreq_create_freq_table(struct mmc_host *host)
 		host->card->clk_scaling_lowest,
 		host->card->clk_scaling_highest);
 
+	/*
+	 * Create the frequency table and initialize it with default values.
+	 * Initialize it with platform specific frequencies if the frequency
+	 * table supplied by platform driver is present, otherwise initialize
+	 * it with min and max frequencies supported by the card.
+	 */
 	if (!clk_scaling->freq_table) {
-		pr_debug("%s: no frequency table defined -  setting default\n",
-			mmc_hostname(host));
+		if (clk_scaling->pltfm_freq_table_sz)
+			clk_scaling->freq_table_sz =
+				clk_scaling->pltfm_freq_table_sz;
+		else
+			clk_scaling->freq_table_sz = 2;
+
 		clk_scaling->freq_table = kzalloc(
-			2*sizeof(*(clk_scaling->freq_table)), GFP_KERNEL);
+			(clk_scaling->freq_table_sz *
+			sizeof(*(clk_scaling->freq_table))), GFP_KERNEL);
 		if (!clk_scaling->freq_table)
 			return -ENOMEM;
-		clk_scaling->freq_table[0] = host->card->clk_scaling_lowest;
-		clk_scaling->freq_table[1] = host->card->clk_scaling_highest;
-		clk_scaling->freq_table_sz = 2;
-		goto out;
+
+		if (clk_scaling->pltfm_freq_table) {
+			memcpy(clk_scaling->freq_table,
+				clk_scaling->pltfm_freq_table,
+				(clk_scaling->pltfm_freq_table_sz *
+				sizeof(*(clk_scaling->pltfm_freq_table))));
+		} else {
+			pr_debug("%s: no frequency table defined -  setting default\n",
+				mmc_hostname(host));
+			clk_scaling->freq_table[0] =
+				host->card->clk_scaling_lowest;
+			clk_scaling->freq_table[1] =
+				host->card->clk_scaling_highest;
+			goto out;
+		}
 	}
 
 	if (host->card->clk_scaling_lowest >
@@ -803,7 +852,7 @@ int mmc_resume_clk_scaling(struct mmc_host *host)
 	devfreq_min_clk = host->clk_scaling.freq_table[0];
 
 	host->clk_scaling.curr_freq = devfreq_max_clk;
-	if (host->ios.clock < host->card->clk_scaling_highest)
+	if (host->ios.clock < host->clk_scaling.freq_table[max_clk_idx])
 		host->clk_scaling.curr_freq = devfreq_min_clk;
 
 	host->clk_scaling.clk_scaling_in_progress = false;
@@ -863,6 +912,10 @@ int mmc_exit_clk_scaling(struct mmc_host *host)
 
 	host->clk_scaling.devfreq = NULL;
 	atomic_set(&host->clk_scaling.devfreq_abort, 1);
+
+	kfree(host->clk_scaling.freq_table);
+	host->clk_scaling.freq_table = NULL;
+
 	pr_debug("%s: devfreq was removed\n", mmc_hostname(host));
 
 	return 0;
@@ -948,6 +1001,17 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 			pr_debug("%s:     %d bytes transferred: %d\n",
 				mmc_hostname(host),
 				mrq->data->bytes_xfered, mrq->data->error);
+			if (mrq->lat_hist_enabled) {
+				ktime_t completion;
+				u_int64_t delta_us;
+
+				completion = ktime_get();
+				delta_us = ktime_us_delta(completion,
+							  mrq->io_start);
+				blk_update_latency_hist(&host->io_lat_s,
+					(mrq->data->flags & MMC_DATA_READ),
+					delta_us);
+			}
 			trace_mmc_blk_rw_end(cmd->opcode, cmd->arg, mrq->data);
 		}
 
@@ -1456,8 +1520,13 @@ static void mmc_wait_for_req_done(struct mmc_host *host,
 			}
 		}
 		if (!cmd->error || !cmd->retries ||
-		    mmc_card_removed(host->card))
+		    mmc_card_removed(host->card)) {
+			if (cmd->error && !cmd->retries &&
+			     cmd->opcode != MMC_SEND_STATUS &&
+			     cmd->opcode != MMC_SEND_TUNING_BLOCK)
+				mmc_recovery_fallback_lower_speed(host);
 			break;
+		}
 
 		mmc_retune_recheck(host);
 
@@ -1698,6 +1767,11 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 	}
 
 	if (!err && areq) {
+		if (host->latency_hist_enabled) {
+			areq->mrq->io_start = ktime_get();
+			areq->mrq->lat_hist_enabled = 1;
+		} else
+			areq->mrq->lat_hist_enabled = 0;
 		trace_mmc_blk_rw_start(areq->mrq->cmd->opcode,
 				       areq->mrq->cmd->arg,
 				       areq->mrq->data);
@@ -2094,6 +2168,45 @@ int __mmc_claim_host(struct mmc_host *host, atomic_t *abort)
 EXPORT_SYMBOL(__mmc_claim_host);
 
 /**
+ *     mmc_try_claim_host - try exclusively to claim a host
+ *        and keep trying for given time, with a gap of 10ms
+ *     @host: mmc host to claim
+ *     @dealy_ms: delay in ms
+ *
+ *     Returns %1 if the host is claimed, %0 otherwise.
+ */
+int mmc_try_claim_host(struct mmc_host *host, unsigned int delay_ms)
+{
+	int claimed_host = 0;
+	unsigned long flags;
+	int retry_cnt = delay_ms/10;
+	bool pm = false;
+
+	do {
+		spin_lock_irqsave(&host->lock, flags);
+		if (!host->claimed || host->claimer == current) {
+			host->claimed = 1;
+			host->claimer = current;
+			host->claim_cnt += 1;
+			claimed_host = 1;
+			if (host->claim_cnt == 1)
+				pm = true;
+		}
+		spin_unlock_irqrestore(&host->lock, flags);
+		if (!claimed_host)
+			mmc_delay(10);
+	} while (!claimed_host && retry_cnt--);
+
+	if (pm)
+		pm_runtime_get_sync(mmc_dev(host));
+
+	if (host->ops->enable && claimed_host && host->claim_cnt == 1)
+		host->ops->enable(host);
+	return claimed_host;
+}
+EXPORT_SYMBOL(mmc_try_claim_host);
+
+/**
  *	mmc_release_host - release a host
  *	@host: mmc host to release
  *
@@ -2132,6 +2245,10 @@ void mmc_get_card(struct mmc_card *card)
 {
 	pm_runtime_get_sync(&card->dev);
 	mmc_claim_host(card->host);
+#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
+	if (mmc_bus_needs_resume(card->host))
+		mmc_resume_bus(card->host);
+#endif
 }
 EXPORT_SYMBOL(mmc_get_card);
 
@@ -2249,6 +2366,13 @@ void mmc_ungate_clock(struct mmc_host *host)
 		WARN_ON(host->ios.clock);
 		/* This call will also set host->clk_gated to false */
 		__mmc_set_clock(host, host->clk_old);
+		/*
+		 * We have seen that host controller's clock tuning circuit may
+		 * go out of sync if controller clocks are gated.
+		 * To workaround this issue, we are triggering retuning of the
+		 * tuning circuit after ungating the controller clocks.
+		 */
+		mmc_retune_needed(host);
 	}
 }
 
@@ -3078,7 +3202,6 @@ int mmc_resume_bus(struct mmc_host *host)
 
 	spin_lock_irqsave(&host->lock, flags);
 	host->bus_resume_flags &= ~MMC_BUSRESUME_NEEDS_RESUME;
-	host->rescan_disable = 0;
 	spin_unlock_irqrestore(&host->lock, flags);
 
 	mmc_bus_get(host);
@@ -3240,7 +3363,7 @@ void mmc_init_erase(struct mmc_card *card)
 }
 
 static unsigned int mmc_mmc_erase_timeout(struct mmc_card *card,
-				          unsigned int arg, unsigned int qty)
+					  unsigned int arg, unsigned int qty)
 {
 	unsigned int erase_timeout;
 
@@ -3969,6 +4092,10 @@ int _mmc_detect_card_removed(struct mmc_host *host)
 		return 1;
 
 	ret = host->bus_ops->alive(host);
+	if (ret && (host->card->sd_bus_speed == UHS_SDR104_BUS_SPEED)) {
+		if (!mmc_hw_reset(host))
+			ret = host->bus_ops->alive(host);
+	}
 
 	/*
 	 * Card detect status and alive check may be out of sync if card is
@@ -3983,8 +4110,18 @@ int _mmc_detect_card_removed(struct mmc_host *host)
 	}
 
 	if (ret) {
-		mmc_card_set_removed(host->card);
-		pr_info("%s: card remove detected\n", mmc_hostname(host));
+		if (host->ops->get_cd && host->ops->get_cd(host)) {
+			mmc_recovery_fallback_lower_speed(host);
+			ret = 0;
+		} else {
+			mmc_card_set_removed(host->card);
+			if (host->card->sdr104_blocked) {
+				mmc_host_set_sdr104(host);
+				host->card->sdr104_blocked = false;
+			}
+			pr_debug("%s: card remove detected\n",
+					mmc_hostname(host));
+		}
 	}
 
 	return ret;
@@ -4005,16 +4142,20 @@ int mmc_detect_card_removed(struct mmc_host *host)
 	 * The card will be considered unchanged unless we have been asked to
 	 * detect a change or host requires polling to provide card detection.
 	 */
-	if (!host->detect_change && !(host->caps & MMC_CAP_NEEDS_POLL))
+	if (!host->detect_change && !(host->caps & MMC_CAP_NEEDS_POLL) &&
+			!(host->caps2 & MMC_CAP2_DETECT_ON_ERR))
 		return ret;
 
 	host->detect_change = 0;
 	if (!ret) {
 		ret = _mmc_detect_card_removed(host);
 #if defined(CONFIG_SEC_HYBRID_TRAY)
-		if (ret && ((host->caps & MMC_CAP_NEEDS_POLL) || mmc_card_removed(card))) {
+		if (ret && ((host->caps & MMC_CAP_NEEDS_POLL) ||
+				mmc_card_removed(card) ||
+				host->caps2 & MMC_CAP2_DETECT_ON_ERR)) {
 #else
-		if (ret && (host->caps & MMC_CAP_NEEDS_POLL)) {
+		if (ret && (host->caps & MMC_CAP_NEEDS_POLL ||
+				host->caps2 & MMC_CAP2_DETECT_ON_ERR)) {
 #endif
 			/*
 			 * Schedule a detect work as soon as possible to let a
@@ -4304,10 +4445,6 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 	case PM_SUSPEND_PREPARE:
 	case PM_RESTORE_PREPARE:
 		spin_lock_irqsave(&host->lock, flags);
-		if (mmc_bus_needs_resume(host)) {
-			spin_unlock_irqrestore(&host->lock, flags);
-			break;
-		}
 		host->rescan_disable = 1;
 		spin_unlock_irqrestore(&host->lock, flags);
 		cancel_delayed_work_sync(&host->detect);
@@ -4429,6 +4566,54 @@ static void __exit mmc_exit(void)
 	mmc_unregister_host_class();
 	mmc_unregister_bus();
 	destroy_workqueue(workqueue);
+}
+
+static ssize_t
+latency_hist_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+
+	return blk_latency_hist_show(&host->io_lat_s, buf);
+}
+
+/*
+ * Values permitted 0, 1, 2.
+ * 0 -> Disable IO latency histograms (default)
+ * 1 -> Enable IO latency histograms
+ * 2 -> Zero out IO latency histograms
+ */
+static ssize_t
+latency_hist_store(struct device *dev, struct device_attribute *attr,
+		   const char *buf, size_t count)
+{
+	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+	long value;
+
+	if (kstrtol(buf, 0, &value))
+		return -EINVAL;
+	if (value == BLK_IO_LAT_HIST_ZERO)
+		blk_zero_latency_hist(&host->io_lat_s);
+	else if (value == BLK_IO_LAT_HIST_ENABLE ||
+		 value == BLK_IO_LAT_HIST_DISABLE)
+		host->latency_hist_enabled = value;
+	return count;
+}
+
+static DEVICE_ATTR(latency_hist, S_IRUGO | S_IWUSR,
+		   latency_hist_show, latency_hist_store);
+
+void
+mmc_latency_hist_sysfs_init(struct mmc_host *host)
+{
+	if (device_create_file(&host->class_dev, &dev_attr_latency_hist))
+		dev_err(&host->class_dev,
+			"Failed to create latency_hist sysfs entry\n");
+}
+
+void
+mmc_latency_hist_sysfs_exit(struct mmc_host *host)
+{
+	device_remove_file(&host->class_dev, &dev_attr_latency_hist);
 }
 
 subsys_initcall(mmc_init);

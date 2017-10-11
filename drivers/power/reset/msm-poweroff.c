@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,11 +23,12 @@
 #include <linux/reboot.h>
 #include <linux/pm.h>
 #include <linux/delay.h>
-#include <linux/qpnp/power-on.h>
+#include <linux/input/qpnp-power-on.h>
 #include <linux/of_address.h>
 
 #include <asm/cacheflush.h>
 #include <asm/system_misc.h>
+#include <asm/memory.h>
 
 #include <soc/qcom/scm.h>
 #include <soc/qcom/restart.h>
@@ -37,6 +38,10 @@
 #include <linux/qcom/sec_debug.h>
 #include <linux/notifier.h>
 #include <linux/ftrace.h>
+#endif
+
+#if defined(CONFIG_SEC_ABC)
+#include <linux/sec_abc.h>
 #endif
 
 #define EMERGENCY_DLOAD_MAGIC1    0x322A4F99
@@ -60,9 +65,8 @@ static int restart_mode;
  when any expection occurs in the early stage of bootup.
 */
 extern void *restart_reason;
-static void *dload_type_addr;  
 #else
-static void *restart_reason, *dload_type_addr;
+static void *restart_reason;
 #endif
 
 static bool scm_pmic_arbiter_disable_supported;
@@ -76,17 +80,23 @@ static void scm_disable_sdi(void);
  * There is no API from TZ to re-enable the registers.
  * So the SDI cannot be re-enabled when it already by-passed.
 */
-static int download_mode = 1;
-static struct kobject dload_kobj;
 
 #ifdef CONFIG_QCOM_DLOAD_MODE
 #define EDL_MODE_PROP "qcom,msm-imem-emergency_download_mode"
 #define DL_MODE_PROP "qcom,msm-imem-download_mode"
+#ifdef CONFIG_RANDOMIZE_BASE
+#define KASLR_OFFSET_PROP "qcom,msm-imem-kaslr_offset"
+#endif
 
 static int in_panic;
-static void *dload_mode_addr;
+static int download_mode = 1;
+static struct kobject dload_kobj;
+static void *dload_mode_addr, *dload_type_addr;
 static bool dload_mode_enabled;
 static void *emergency_dload_mode_addr;
+#ifdef CONFIG_RANDOMIZE_BASE
+static void *kaslr_imem_addr;
+#endif
 static bool scm_dload_supported;
 
 static int dload_set(const char *val, struct kernel_param *kp);
@@ -289,9 +299,9 @@ static void msm_restart_prepare(const char *cmd)
 	int hard_reset_reason = 0xff;
 #endif
 #ifndef CONFIG_SEC_DEBUG
-#ifdef CONFIG_QCOM_DLOAD_MODE
 	bool need_warm_reset = false;
 
+#ifdef CONFIG_QCOM_DLOAD_MODE
 
 	/* Write download mode flags if we're panic'ing
 	 * Write download mode flags if restart_mode says so
@@ -346,6 +356,7 @@ static void msm_restart_prepare(const char *cmd)
 			hard_reset_reason = PON_RESTART_REASON_RECOVERY;
 			qpnp_pon_set_restart_reason(hard_reset_reason);
 			__raw_writel(0x77665502, restart_reason);
+			panic("recovery");
 		} else if (!strcmp(cmd, "rtc")) {
 			hard_reset_reason = PON_RESTART_REASON_RTC;
 			qpnp_pon_set_restart_reason(hard_reset_reason);
@@ -455,6 +466,11 @@ static void msm_restart_prepare(const char *cmd)
 		} else if (!strncmp(cmd, "sltcomplete", 11)){ 
 			hard_reset_reason = PON_RESTART_REASON_SLT_COMPLETE;
 			qpnp_pon_set_restart_reason(hard_reset_reason);
+#if defined(CONFIG_SEC_ABC)
+		} else if (!strncmp(cmd, "user_dram_test", 14) && (sec_abc_get_magic() == ABC_ENABLE_MAGIC)) { 
+			hard_reset_reason = PON_RESTART_REASON_USER_DRAM_TEST;
+			qpnp_pon_set_restart_reason(hard_reset_reason);
+#endif
 		} else {
 			hard_reset_reason = PON_RESTART_REASON_UNKNOWN;
 			qpnp_pon_set_restart_reason(hard_reset_reason);
@@ -544,6 +560,7 @@ static void do_msm_poweroff(void)
 	return;
 }
 
+#ifdef CONFIG_QCOM_DLOAD_MODE
 static ssize_t attr_show(struct kobject *kobj, struct attribute *attr,
 				char *buf)
 {
@@ -634,6 +651,7 @@ static struct notifier_block dload_reboot_block = {
 	.notifier_call = dload_mode_normal_reboot_handler
 };
 #endif
+#endif
 
 static int msm_restart_probe(struct platform_device *pdev)
 {
@@ -667,6 +685,28 @@ static int msm_restart_probe(struct platform_device *pdev)
 		if (!emergency_dload_mode_addr)
 			pr_err("unable to map imem EDLOAD mode offset\n");
 	}
+
+#ifdef CONFIG_RANDOMIZE_BASE
+#define KASLR_OFFSET_BIT_MASK	0x00000000FFFFFFFF
+	np = of_find_compatible_node(NULL, NULL, KASLR_OFFSET_PROP);
+	if (!np) {
+		pr_err("unable to find DT imem KASLR_OFFSET node\n");
+	} else {
+		kaslr_imem_addr = of_iomap(np, 0);
+		if (!kaslr_imem_addr)
+			pr_err("unable to map imem KASLR offset\n");
+	}
+
+	if (kaslr_imem_addr) {
+		__raw_writel(0xdead4ead, kaslr_imem_addr);
+		__raw_writel(KASLR_OFFSET_BIT_MASK &
+		(kimage_vaddr - KIMAGE_VADDR), kaslr_imem_addr + 4);
+		__raw_writel(KASLR_OFFSET_BIT_MASK &
+			((kimage_vaddr - KIMAGE_VADDR) >> 32),
+			kaslr_imem_addr + 8);
+		iounmap(kaslr_imem_addr);
+	}
+#endif
 
 	np = of_find_compatible_node(NULL, NULL,
 				"qcom,msm-imem-dload-type");
@@ -728,13 +768,14 @@ skip_sysfs_create:
 	if (scm_is_call_available(SCM_SVC_PWR, SCM_IO_DEASSERT_PS_HOLD) > 0)
 		scm_deassert_ps_hold_supported = true;
 
+#ifdef CONFIG_QCOM_DLOAD_MODE
     // forced setting for DLOAD cookie
 	//download_mode = scm_is_secure_device();
 	download_mode = 1;
 	set_dload_mode(download_mode);
 	if (!download_mode)
 		scm_disable_sdi();
-
+#endif
 	return 0;
 
 err_restart_reason:
@@ -763,4 +804,4 @@ static int __init msm_restart_init(void)
 {
 	return platform_driver_register(&msm_restart_driver);
 }
-device_initcall(msm_restart_init);
+pure_initcall(msm_restart_init);

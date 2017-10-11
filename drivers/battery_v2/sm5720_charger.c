@@ -29,6 +29,7 @@ static unsigned short sm5720_get_input_current(struct sm5720_charger_data *charg
 static int sm5720_set_charge_current(struct sm5720_charger_data *charger, unsigned short chg_mA);
 static unsigned short sm5720_get_charge_current(struct sm5720_charger_data *charger);
 static void sm5720_charger_enable_aicl_irq(struct sm5720_charger_data *charger);
+static void sm5720_charger_initialize(struct sm5720_charger_data *charger);
 
 static inline u8 _calc_limit_current_offset_to_mA(unsigned short mA)
 {
@@ -136,6 +137,24 @@ static int sm5720_CHG_set_ENQ4FET(struct sm5720_charger_data *charger, bool enab
 	return 0;
 }
 
+static int sm5720_CHG_set_AUTOSET(struct sm5720_charger_data *charger, bool enable)
+{
+	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_CNTL1, ((enable & 0x1) << 4), (0x1 << 4));
+
+	return 0;
+}
+
+static int sm5720_CHG_get_AUTOSET(struct sm5720_charger_data *charger)
+{
+	u8 reg = 0x0;
+
+	sm5720_read_reg(charger->i2c, SM5720_CHG_REG_CNTL1, &reg);
+
+	reg = (reg >> 4) & 0x1;
+
+	return reg;
+}
+
 static int sm5720_CHG_set_AICLEN_WPC(struct sm5720_charger_data *charger, bool enable)
 {
 	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_CNTL1, ((enable & 0x1) << 5), (0x1 << 5));
@@ -153,6 +172,10 @@ static int sm5720_CHG_set_AICLEN_VBUS(struct sm5720_charger_data *charger, bool 
 static int sm5720_set_input_current(struct sm5720_charger_data *charger, unsigned short limit_mA)
 {
 	u8 offset = _calc_limit_current_offset_to_mA(limit_mA);
+
+	dev_info(charger->dev, "set Input LIMIT src=0x%02X, current=%dmA, offset=0x%02x\n", 
+		is_wireless_type(charger->cable_type) ? SM5720_CHG_REG_WPCINCNTL:SM5720_CHG_REG_VBUSCNTL,
+		limit_mA, offset);
 
 	mutex_lock(&charger->charger_mutex);
 
@@ -193,18 +216,29 @@ static int sm5720_set_wireless_input_current(struct sm5720_charger_data *charger
 static unsigned short sm5720_get_input_current(struct sm5720_charger_data *charger)
 {
 	u8 offset = 0x0;
+	unsigned short LIMIT_mA = 0;
 
 	if (is_wireless_type(charger->cable_type))
 		sm5720_read_reg(charger->i2c, SM5720_CHG_REG_WPCINCNTL, &offset);
 	else
 		sm5720_read_reg(charger->i2c, SM5720_CHG_REG_VBUSCNTL, &offset);
 
-	return _calc_limit_current_mA_to_offset(offset & 0x7F);
+	LIMIT_mA = _calc_limit_current_mA_to_offset(offset & 0x7F);
+
+	dev_info(charger->dev, "get INPUT LIMIT src=0x%02X, offset=0x%02x, current=%dmA\n",
+		is_wireless_type(charger->cable_type) ? SM5720_CHG_REG_WPCINCNTL:SM5720_CHG_REG_VBUSCNTL,
+		offset, LIMIT_mA);
+
+	return LIMIT_mA;
 }
 
 static int sm5720_set_charge_current(struct sm5720_charger_data *charger, unsigned short chg_mA)
 {
 	u8 offset = _calc_chg_current_offset_to_mA(chg_mA);
+
+	dev_info(charger->dev, "set FASTCHG src=0x%02X, current=%dmA, offset=0x%02x\n",
+		is_wireless_type(charger->cable_type) ? SM5720_CHG_REG_CHGCNTL3:SM5720_CHG_REG_CHGCNTL2,
+		chg_mA, offset);
 
 	if (is_wireless_type(charger->cable_type))
 		sm5720_update_reg(charger->i2c, SM5720_CHG_REG_CHGCNTL3, ((offset & 0x3F) << 0), (0x3F << 0));
@@ -217,13 +251,20 @@ static int sm5720_set_charge_current(struct sm5720_charger_data *charger, unsign
 static unsigned short sm5720_get_charge_current(struct sm5720_charger_data *charger)
 {
 	u8 offset = 0x0;
+	unsigned short FASTCHG_mA = 0;
 
 	if (is_wireless_type(charger->cable_type))
 		sm5720_read_reg(charger->i2c, SM5720_CHG_REG_CHGCNTL3, &offset);
 	else
 		sm5720_read_reg(charger->i2c, SM5720_CHG_REG_CHGCNTL2, &offset);
+	
+	FASTCHG_mA = _calc_chg_current_mA_to_offset(offset & 0x3F);
 
-	return _calc_chg_current_mA_to_offset(offset & 0x3F);
+	dev_info(charger->dev, "get FASTCHG src=0x%02X, offset=0x%02x, current=%dmA\n",
+		is_wireless_type(charger->cable_type) ? SM5720_CHG_REG_CHGCNTL3:SM5720_CHG_REG_CHGCNTL2,
+		offset, FASTCHG_mA);
+
+	return FASTCHG_mA;
 }
 
 static int sm5720_CHG_set_VSYS_MIN(struct sm5720_charger_data *charger, u8 val)
@@ -286,6 +327,20 @@ static unsigned short sm5720_CHG_get_TOPOFF(struct sm5720_charger_data *charger)
     return _calc_topoff_mA_to_offset(offset & 0x1F);
 }
 
+static int sm5720_CHG_set_SS_LIM_VBUS(struct sm5720_charger_data *charger, u8 val)
+{
+	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_VBUSCNTL, ((val & 0x1) << 7), (0x1 << 7));
+
+	return 0;
+}
+
+static int sm5720_CHG_set_SS_FAST_VBUS(struct sm5720_charger_data *charger, u8 val)
+{
+	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_CHGCNTL2, ((val & 0x1) << 6), (0x1 << 6));
+
+	return 0;
+}
+
 static int sm5720_CHG_set_AICLTH(struct sm5720_charger_data *charger, u8 val)
 {
 	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_CHGCNTL6, ((val & 0x3) << 6), (0x3 << 6));
@@ -308,18 +363,19 @@ static int sm5720_CHG_set_TOPOFFTIMER(struct sm5720_charger_data *charger, u8 va
 }
 
 #if defined(SM5720_WATCHDOG_RESET_ACTIVATE)
-static int sm5720_CHG_set_ENWATCHDOG(struct sm5720_charger_data *charger, bool enable)
+static int sm5720_CHG_set_WATCHDOG_TMR(struct sm5720_charger_data *charger, u8 val)
 {
-	pr_info("%s: WDT en = %d \n", __func__, enable);
-
-	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_WDTCNTL, ((enable & 0x1) << 0), (0x1 << 0));
+	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_WDTCNTL, ((val & 0x3) << 1), (0x3 << 1));
 
 	return 0;
 }
 
-static int sm5720_CHG_set_WATCHDOG_TMR(struct sm5720_charger_data *charger, u8 val)
+static int sm5720_CHG_set_ENWATCHDOG(struct sm5720_charger_data *charger, bool enable)
 {
-	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_WDTCNTL, ((val & 0x3) << 1), (0x3 << 1));
+	pr_info("%s: WDT en = %d \n", __func__, enable);
+
+	sm5720_CHG_set_WATCHDOG_TMR(charger, WATCHDOG_TIMER_120s);
+	sm5720_update_reg(charger->i2c, SM5720_CHG_REG_WDTCNTL, ((enable & 0x1) << 0), (0x1 << 0));
 
 	return 0;
 }
@@ -409,6 +465,11 @@ static int psy_chg_set_cable_online(struct sm5720_charger_data *charger, int cab
 			pr_info("%s: enable aicl : 0x%x\n", __func__, reg_data);
 		}
 	} else {
+		if (sm5720_CHG_get_AUTOSET(charger) == true) {
+			pr_info("Charger IC Reset!!! - do re-initialize process\n");
+			sm5720_charger_initialize(charger);
+		}
+
 		if (is_wireless_type(charger->cable_type)) {
 			sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_VBUSIN, 0);
 			sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_WPCIN, 1);
@@ -416,13 +477,17 @@ static int psy_chg_set_cable_online(struct sm5720_charger_data *charger, int cab
 			sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_WPCIN, 0);
 			sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_VBUSIN, 1);
 		}
-		if ((charger->irq_aicl_enabled == 1) && is_hv_wire_type(charger->cable_type)) {
-			u8 reg_data;
-			charger->irq_aicl_enabled = 0;
-			disable_irq_nosync(charger->irq_aicl);
-			cancel_delayed_work_sync(&charger->aicl_work);
-			sm5720_read_reg(charger->i2c, SM5720_CHG_REG_INTMSK2, &reg_data);
-			pr_info("%s: disable aicl : 0x%x\n", __func__, reg_data);
+		if (is_hv_wire_type(charger->cable_type) ||
+			(charger->cable_type == SEC_BATTERY_CABLE_HV_TA_CHG_LIMIT)) {
+			if (charger->irq_aicl_enabled == 1) {
+				u8 reg_data;
+				charger->irq_aicl_enabled = 0;
+				disable_irq_nosync(charger->irq_aicl);
+				cancel_delayed_work_sync(&charger->aicl_work);
+				sm5720_read_reg(charger->i2c, SM5720_CHG_REG_INTMSK2, &reg_data);
+				pr_info("%s: disable aicl : 0x%x\n", __func__, reg_data);
+				charger->slow_late_chg_mode = false;
+			}
 		}
 	}
 	dev_info(charger->dev, "[end] is_charging=%d, fc = %d, il = %d, cable = %d,"
@@ -839,37 +904,45 @@ static int sm5720_otg_set_property(struct power_supply *psy,
 {
 	struct sm5720_charger_data *charger = power_supply_get_drvdata(psy);
 	union power_supply_propval value;
+	int ret = 0;
+	u8 reg;
+
+	wake_lock(&charger->otg_wake_lock);
 
 	switch (psp) {
-		case POWER_SUPPLY_PROP_ONLINE:
-			dev_info(charger->dev, "OTG:POWER_SUPPLY_PROP_ONLINE - %s\n", val->intval > 0 ? "ON" : "OFF");
-			if (sm5720_charger_check_oper_otg_mode_on() == val->intval || lpcharge)
-				return 0;
-			if (val->intval) {
-				if (is_hv_wireless_type(charger->cable_type)) {
-					pr_info("%s: OTG enabled on HV_WC, set 5V", __func__);
-					value.intval = WIRELESS_VOUT_5V;
-					psy_do_property(charger->wireless_charger_name, set,
-						POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
-					mdelay(200);
-				}
-				sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_USB_OTG, 1);
-			} else {
-				sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_USB_OTG, 0);
-				if (is_hv_wireless_type(charger->cable_type)) {
-					pr_info("%s: OTG disabled on HV_WC, set 9V", __func__);
-					value.intval = WIRELESS_VOUT_9V_OTG;
-					psy_do_property(charger->wireless_charger_name, set,
-						POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
-				}
+	case POWER_SUPPLY_PROP_ONLINE:
+		dev_info(charger->dev, "OTG:POWER_SUPPLY_PROP_ONLINE - %s\n", val->intval > 0 ? "ON" : "OFF");
+		if (sm5720_charger_check_oper_otg_mode_on() == val->intval || lpcharge) {
+			goto err_otg;
+		}
+		value.intval = val->intval;
+		if (val->intval) {
+			psy_do_property("wireless", set,
+				POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL, value);
+			if (!is_hv_wireless_type(charger->cable_type)) {
+				sm5720_read_reg(charger->i2c, SM5720_CHG_REG_STATUS1, &reg);
+				pr_info("%s: CHECK VBUS 0x%x", __func__,reg);
+				if (reg & (0x1 << 0)) /* check: VBUS_POK */
+					sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_VBUSIN, 1);
+				else
+					sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_VBUSIN, 0);
 			}
-			power_supply_changed(charger->psy_otg);
-			break;
-		default:
-			return -EINVAL;
+			sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_USB_OTG, 1);
+		} else {
+			sm5720_charger_oper_push_event(SM5720_CHARGER_OP_EVENT_USB_OTG, 0);
+			psy_do_property("wireless", set,
+				POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL, value);
+		}
+		power_supply_changed(charger->psy_otg);
+		break;
+	default:
+		ret = -EINVAL;
+		goto err_otg;
 	}
 
-	return 0;
+err_otg:
+	wake_unlock(&charger->otg_wake_lock);
+	return ret;
 }
 
 /**
@@ -1054,27 +1127,21 @@ static irqreturn_t sm5720_otg_fail_isr(int irq, void *data)
 {
 	struct sm5720_charger_data *charger = (struct sm5720_charger_data *)data;
 	union power_supply_propval value = {0, };
-	u8 otg_state = 0;
 #ifdef CONFIG_USB_HOST_NOTIFY
 	struct otg_notify *o_notify = get_otg_notify();
 #endif
 
+	/* Because of Auto reboosting by OTGFAIL irq, just disable boosting manually
+	   without checking OTGFAIL status bit */
 	dev_info(charger->dev, "%s - irq=%d\n", __func__, irq);
 
-	sm5720_read_reg(charger->i2c, SM5720_CHG_REG_STATUS3, &otg_state);
-	if(otg_state & (0x1 << 2)) {
-		dev_info(charger->dev, "%s OTG fail !! \n", __func__);
-
 #ifdef CONFIG_USB_HOST_NOTIFY
-		send_otg_notify(o_notify, NOTIFY_EVENT_OVERCURRENT, 0);
+	send_otg_notify(o_notify, NOTIFY_EVENT_OVERCURRENT, 0);
 #endif
 
-		/* disable the register values just related to OTG and
-		   keep the values about the charging */
-		value.intval = 0;
-		psy_do_property("otg", set,
-				POWER_SUPPLY_PROP_ONLINE, value);
-	}
+	value.intval = 0;
+	psy_do_property("otg", set,
+			POWER_SUPPLY_PROP_ONLINE, value);
 
 	return IRQ_HANDLED;
 }
@@ -1158,11 +1225,11 @@ static void aicl_work(struct work_struct *work)
                 value.intval = input_limit;
                 psy_do_property("battery", set,
                         POWER_SUPPLY_EXT_PROP_AICL_CURRENT, value);
-        }
 
-	if (!is_wireless_type(charger->cable_type)) {
-		_check_slow_rate_charging(charger);
-	}
+		if (!is_wireless_type(charger->cable_type)) {
+			_check_slow_rate_charging(charger);
+		}
+        }
 
 	mutex_unlock(&charger->charger_mutex);
 	wake_unlock(&charger->aicl_wake_lock);
@@ -1263,6 +1330,9 @@ static void sm5720_charger_initialize(struct sm5720_charger_data *charger)
 	dev_info(charger->dev, "charger initial hardware condition process start. (float_voltage=%d)\n", 
 			charger->float_voltage);
 
+	sm5720_CHG_set_SS_LIM_VBUS(charger, SS_LIM_VBUS_40mA_per_ms);
+	sm5720_CHG_set_SS_FAST_VBUS(charger, SS_FAST_VBUS_10mA_per_ms);
+	sm5720_CHG_set_AUTOSET(charger, 0);
 	sm5720_CHG_set_AICLTH(charger, AICL_THRES_VOLTAGE_4_5V);
 	sm5720_CHG_set_AICLEN_VBUS(charger, 1);
 	sm5720_CHG_set_AICLEN_WPC(charger, 1);
@@ -1277,15 +1347,6 @@ static void sm5720_charger_initialize(struct sm5720_charger_data *charger)
 	sm5720_CHG_set_TOPOFFTIMER(charger, TOPOFF_TIMER_30m);
 	sm5720_CHG_set_AUTOSTOP(charger, 1);
 
-#if defined(SM5720_WATCHDOG_RESET_ACTIVATE)
-	/* Watchdog-Timer configuration for Battery Swelling protection 
-		Watchdog-Timer is able to work from PASS5 */
-	if(charger->pmic_ver >= SM5720_PASS5) {
-		sm5720_CHG_set_WATCHDOG_TMR(charger, WATCHDOG_TIMER_120s);
-		sm5720_CHG_set_ENWATCHDOG(charger, false);
-	}
-#endif
-
 #if defined(SM5720_SBPS_ACTIVATE)
 	/* SBPS configuration */
 	sm5720_CHG_set_THEM_H(charger, SBPS_THEM_HOT_60C);
@@ -1294,8 +1355,6 @@ static void sm5720_charger_initialize(struct sm5720_charger_data *charger)
 	sm5720_CHG_set_VBAT_SBPS(charger, SBPS_EN_THRES_V_4_2V);
 	sm5720_CHG_set_ENSBPS(charger, 1);
 #endif
-
-	sm5720_chg_print_reg(charger);
 
 	dev_info(charger->dev, "charger initial hardware condition process done.\n");
 }
@@ -1327,6 +1386,7 @@ static inline int _init_sm5720_charger_drv_info(struct sm5720_charger_data *char
 	wake_lock_init(&charger->wpc_wake_lock, WAKE_LOCK_SUSPEND, "charger-wpc");
 	wake_lock_init(&charger->wpc_current_wake_lock, WAKE_LOCK_SUSPEND, "charger-wpc-current");
 	wake_lock_init(&charger->sysovlo_wake_lock, WAKE_LOCK_SUSPEND, "sysovlo");
+	wake_lock_init(&charger->otg_wake_lock, WAKE_LOCK_SUSPEND, "otg-path");	
 
 	/* Get IRQ-service numbers */
 	charger->irq_wpcin_pok = pdata->irq_base + SM5720_CHG_IRQ_INT1_WPCINPOK;
@@ -1399,6 +1459,14 @@ static int sm5720_charger_probe(struct platform_device *pdev)
 	charger->irq_aicl_enabled = -1;
 
 	sm5720_charger_initialize(charger);
+#if defined(SM5720_WATCHDOG_RESET_ACTIVATE)
+	/* Watchdog-Timer configuration for Battery Swelling protection 
+		Watchdog-Timer is able to work from PASS5 */
+	if(charger->pmic_ver >= SM5720_PASS5) {
+		sm5720_CHG_set_ENWATCHDOG(charger, false);
+	}
+#endif
+	sm5720_chg_print_reg(charger);
 	sm5720_charger_oper_table_init(charger->i2c);
 
 	ret = _init_sm5720_charger_drv_info(charger);

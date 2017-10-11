@@ -58,9 +58,17 @@ obj-$(CONFIG_MWIFIEX)	+= mwifiex/
 obj-$(CONFIG_BRCMFMAC)	+= brcm80211/
 obj-$(CONFIG_BRCMSMAC)	+= brcm80211/
 
+ifneq ($(CONFIG_BCM4361),)
 obj-$(CONFIG_BCM4361)  += bcmdhd4361/
 obj-$(CONFIG_ARCH_MSM) += bcmdhd4361/dhd_custom_memprealloc.o
 obj-$(CONFIG_ARCH_MSM) += bcmdhd4361/dhd_custom_msm.o
+endif
+
+ifneq ($(CONFIG_BCM4359),)
+obj-$(CONFIG_BCM4359)  += bcmdhd4359/
+obj-$(CONFIG_ARCH_MSM) += bcmdhd4359/dhd_custom_memprealloc.o
+obj-$(CONFIG_ARCH_MSM) += bcmdhd4359/dhd_custom_msm.o
+endif
 
 obj-$(CONFIG_CW1200)	+= cw1200/
 obj-$(CONFIG_RSI_91X)	+= rsi/

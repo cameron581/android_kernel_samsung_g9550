@@ -227,7 +227,6 @@ enum {
 	MFC_VOUT_9V, // 4
 	MFC_VOUT_10V, // 5 
 	MFC_VOUT_5_5V,		/* CC-CV */
-	MFC_VOUT_9V_STEP,
 };
 
 /* System Operating Mode Register, Sys_Op_Mode (0x2B) */
@@ -615,6 +614,7 @@ struct mfc_charger_platform_data {
 	int irq_wpc_det;
 	int wpc_int;
 	int mst_pwr_en;
+	int wpc_en;
 	int irq_wpc_int;
 	int cs100_status;
 	int vout_status;
@@ -630,6 +630,7 @@ struct mfc_charger_platform_data {
 	u32 *fod_a4wp_data;
 	u32 *fod_wpc_data;
 	u32 *fod_pma_data;
+	u32 *fod_hero_5v_data;
 	int fod_data_check;
 	bool ic_on_mode;
 	int hw_rev_changed; /* this is only for noble/zero2 */
@@ -652,6 +653,7 @@ struct mfc_charger_platform_data {
 	int wpc_cc_call_vout;
 	int opfq_cnt;
 	int hv_vout_wa;
+	int mst_switch_delay;
 	int wc_cover_rpp;
 	int wc_hv_rpp;
 };
@@ -677,7 +679,7 @@ struct mfc_charger_data {
 	struct wake_lock wpc_update_lock;
 	struct wake_lock wpc_opfq_lock;
 	struct wake_lock wpc_afc_vout_lock;
-	struct wake_lock wpc_vout_step_lock;
+	struct wake_lock wpc_vout_mode_lock;
 	struct workqueue_struct *wqueue;
 	struct work_struct	wcin_work;
 	struct delayed_work	wpc_det_work;
@@ -689,7 +691,8 @@ struct mfc_charger_data {
 	struct delayed_work	wpc_fw_update_work;
 	struct delayed_work	wpc_afc_vout_work;
 	struct delayed_work	wpc_fw_booting_work;
-	struct delayed_work	wpc_vout_step_work;
+	struct delayed_work	wpc_vout_mode_work;
+	struct delayed_work	wpc_cm_fet_work;
 
 	u16 addr;
 	int size;
@@ -698,10 +701,14 @@ struct mfc_charger_data {
 	int is_mst_on; /* mst */
 	int chip_id;
 	int fw_cmd;
-	int vout_step;
+	int vout_mode;
+	int is_full_status;
 	int mst_off_lock;
 	bool is_otg_on;
 	int led_cover;
+	bool is_probed;
+	bool is_afc_tx;
+	int tx_id;
 };
 
 #endif /* __MFC_CHARGER_H */

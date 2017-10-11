@@ -89,7 +89,7 @@ void muic_read_reg_dump(muic_data_t *pmuic, char *mesg)
 }
 void muic_print_reg_dump(muic_data_t *pmuic)
 {
-	char mesg[256]="";
+	char mesg[512]="";
 
 	muic_read_reg_dump(pmuic, mesg);
 

@@ -30,6 +30,7 @@
 #include <linux/err.h>
 #include "mstdrv.h"
 #include <linux/power_supply.h>
+#include <linux/msm_pcie.h>
 
 /* defines */
 #define	ON				1	// On state
@@ -236,7 +237,10 @@ static void of_mst_hw_onoff(bool on){
 
 		psy_do_property("mfc-charger", set, POWER_SUPPLY_PROP_TECHNOLOGY, value);
 		printk("%s : MST_MODE_ON notified : %d\n", __func__, value.intval);
-		
+
+		/* PCIe LPM Disable */
+		sec_pcie_l1ss_disable(L1SS_MST);
+
 		mdelay(20);
 
 		while (--retry_cnt){
@@ -264,6 +268,9 @@ static void of_mst_hw_onoff(bool on){
 
 		gpio_set_value(mst_pwr_en, 0);
 		printk("%s : mst_pwr_en gets the LOW\n", __func__);
+
+		/* PCIe LPM Enable */
+		sec_pcie_l1ss_enable(L1SS_MST);
 
 		ret = regulator_disable(regulator3_0);
 		if (ret < 0) {

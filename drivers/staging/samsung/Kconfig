@@ -19,3 +19,10 @@ config SEC_FD_DETECT
 	depends on SEC_EXT
 	default n
 
+comment "Samsung ABC Options"
+config SEC_ABC
+	bool "Samsung TN ABC Feature"
+	default n
+	help
+	  Samsung TN ABC Feature
+

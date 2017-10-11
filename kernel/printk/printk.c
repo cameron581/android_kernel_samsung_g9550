@@ -299,6 +299,13 @@ static enum log_flags console_prev;
 static u64 clear_seq;
 static u32 clear_idx;
 
+/* { SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM - the next printk record to read after the last 'clear_knox' command */
+static u64 clear_seq_knox;
+static u32 clear_idx_knox;
+
+#define SYSLOG_ACTION_READ_CLEAR_KNOX 99
+/* } SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
+
 #ifdef CONFIG_SEC_DEBUG
 #define PREFIX_MAX		48
 #else
@@ -1307,7 +1314,7 @@ static int syslog_print(char __user *buf, int size)
 	return len;
 }
 
-static int syslog_print_all(char __user *buf, int size, bool clear)
+static int syslog_print_all(char __user *buf, int size, bool clear, bool knox)
 {
 	char *text;
 	int len = 0;
@@ -1322,19 +1329,33 @@ static int syslog_print_all(char __user *buf, int size, bool clear)
 		u64 seq;
 		u32 idx;
 		enum log_flags prev;
-
-		if (clear_seq < log_first_seq) {
-			/* messages are gone, move to first available one */
-			clear_seq = log_first_seq;
-			clear_idx = log_first_idx;
+		
+		/* { SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
+		/* messages are gone, move to first available one */
+		if (!knox && clear_seq < log_first_seq) {
+				clear_seq = log_first_seq;
+				clear_idx = log_first_idx;
+		} else if (knox && clear_seq_knox < log_first_seq) {
+				clear_seq_knox = log_first_seq;
+				clear_idx_knox = log_first_idx;
 		}
+		/* } SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
 
 		/*
 		 * Find first record that fits, including all following records,
 		 * into the user-provided buffer for this dump.
 		 */
-		seq = clear_seq;
-		idx = clear_idx;
+		 
+		/* { SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */ 
+		if(!knox) {
+			seq = clear_seq;
+			idx = clear_idx;
+		}else { //MDM edmaudit
+			seq = clear_seq_knox;
+			idx = clear_idx_knox;
+		}
+		/* } SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
+		
 		prev = 0;
 		while (seq < log_next_seq) {
 			struct printk_log *msg = log_from_idx(idx);
@@ -1344,10 +1365,18 @@ static int syslog_print_all(char __user *buf, int size, bool clear)
 			idx = log_next(idx);
 			seq++;
 		}
-
+		
+		/* { SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
 		/* move first record forward until length fits into the buffer */
-		seq = clear_seq;
-		idx = clear_idx;
+		if(!knox) {
+			seq = clear_seq;
+			idx = clear_idx;
+		} else { // MDM edmaudit
+			seq = clear_seq_knox;
+			idx = clear_idx_knox;
+		}
+		/* } SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
+
 		prev = 0;
 		while (len > size && seq < log_next_seq) {
 			struct printk_log *msg = log_from_idx(idx);
@@ -1392,10 +1421,18 @@ static int syslog_print_all(char __user *buf, int size, bool clear)
 		}
 	}
 
+	/* { SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
 	if (clear) {
-		clear_seq = log_next_seq;
-		clear_idx = log_next_idx;
+		if (!knox) {
+			clear_seq = log_next_seq;
+			clear_idx = log_next_idx;
+		} else { //MDM edmaudit
+			clear_seq_knox = log_next_seq;
+			clear_idx_knox = log_next_idx;
+		}
 	}
+	/* } SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
+
 	raw_spin_unlock_irq(&logbuf_lock);
 
 	kfree(text);
@@ -1450,11 +1487,11 @@ int do_syslog(int type, char __user *buf, int len, int source)
 			error = -EFAULT;
 			goto out;
 		}
-		error = syslog_print_all(buf, len, clear);
+		error = syslog_print_all(buf, len, clear, false);
 		break;
 	/* Clear ring buffer */
 	case SYSLOG_ACTION_CLEAR:
-		syslog_print_all(NULL, 0, true);
+		syslog_print_all(NULL, 0, true, false);
 		break;
 	/* Disable logging to console */
 	case SYSLOG_ACTION_CONSOLE_OFF:
@@ -1520,6 +1557,21 @@ int do_syslog(int type, char __user *buf, int len, int source)
 	case SYSLOG_ACTION_SIZE_BUFFER:
 		error = log_buf_len;
 		break;
+	/* { SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM edmaudit Read last kernel messages */
+	case SYSLOG_ACTION_READ_CLEAR_KNOX:
+		error = -EINVAL;
+		if (!buf || len < 0)
+			goto out;
+		error = 0;
+		if (!len)
+			goto out;
+		if (!access_ok(VERIFY_WRITE, buf, len)) {
+			error = -EFAULT;
+			goto out;
+		}
+		error = syslog_print_all(buf, len, /* clear */ true, /* knox */true);
+		break;
+	/* } SecProductFeature_KNOX.SEC_PRODUCT_FEATURE_KNOX_SUPPORT_MDM */
 	default:
 		error = -EINVAL;
 		break;
@@ -1970,7 +2022,7 @@ EXPORT_SYMBOL(printk_emit);
 #ifdef CONFIG_SEC_DEBUG
 static inline void emit_sec_log_char(char c)
 {
-		sec_log_buf[*sec_log_idx_ptr & (sec_log_size - 1)] = c;
+		sec_log_buf[*sec_log_idx_ptr % sec_log_size] = c;
 		(*sec_log_idx_ptr)++;
 }
 
@@ -2028,7 +2080,7 @@ static int __init sec_log_save_old(void)
 		for (i = 0; i < last_kmsg_size; i++)
 			last_kmsg_buffer[i] =
 			    sec_log_buf[(*sec_log_idx_ptr - last_kmsg_size +
-					 i) & (sec_log_size - 1)];
+					 i) % sec_log_size];
 		return 1;
 	} else {
 		return 0;
@@ -2052,8 +2104,8 @@ static int __init printk_remap_nocache(void)
 	int bOk = 0;
 
 	sec_getlog_supply_kloginfo(log_buf);
-	nocache_base = ioremap_nocache((phys_addr_t)(sec_log_buf_paddr - 0x1000),
-					sec_log_size + 0x1000);
+	nocache_base = ioremap_nocache((phys_addr_t)sec_log_buf_paddr,
+					sec_log_size);
 
 	if (!nocache_base) {
 		pr_err("Failed to remap nocache log region\n");
@@ -2063,10 +2115,10 @@ static int __init printk_remap_nocache(void)
 	pr_err("%s: nocache_base printk virtual addrs 0x%lx phy=0x%llx \n",
 		__func__, (unsigned long)nocache_base, sec_log_buf_paddr);
 
-	nocache_base = nocache_base + 0x1000;
-	sec_log_buf = nocache_base;
-	sec_log_mag = nocache_base - 0x8;
-	sec_log_idx_ptr = nocache_base - 0x4;
+	sec_log_buf = nocache_base + 0xC;
+	sec_log_mag = nocache_base + 0x4;
+	sec_log_idx_ptr = nocache_base + 0x8;
+	sec_log_size -= 0xC;
 
 	if (*sec_log_mag != SEC_LOG_MAGIC) {
 		pr_err("%s:sec_log_magic is not valid : 0x%x at 0x%p\n"

@@ -532,7 +532,7 @@ static int sde_rotator_import_buffer(struct sde_layer_buffer *buffer,
 	return ret;
 }
 
-static int sde_rotator_secure_session_ctrl(bool enable)
+static int _sde_rotator_secure_session_ctrl(bool enable)
 {
 	struct sde_rot_data_type *mdata = sde_rot_get_mdata();
 	uint32_t sid_info;
@@ -605,6 +605,40 @@ static int sde_rotator_secure_session_ctrl(bool enable)
 	return resp;
 }
 
+static int sde_rotator_secure_session_ctrl(bool enable)
+{
+	struct sde_rot_data_type *mdata = sde_rot_get_mdata();
+	int ret = -EINVAL;
+
+	/**
+	  * wait_for_transition and secure_session_control are filled by client
+	  * callback.
+	  */
+	if (mdata->wait_for_transition && mdata->secure_session_ctrl &&
+		mdata->callback_request) {
+		ret = mdata->wait_for_transition(mdata->sec_cam_en, enable);
+		if (ret < 0) {
+			SDEROT_ERR("failed Secure wait for transition %d\n",
+				   ret);
+			ret = -EPERM;
+		} else {
+			if (mdata->sec_cam_en ^ enable) {
+				mdata->sec_cam_en = enable;
+				ret = mdata->secure_session_ctrl(enable);
+				if (ret)
+					mdata->sec_cam_en = 0;
+		    }
+		}
+	} else if (!mdata->callback_request) {
+		ret = _sde_rotator_secure_session_ctrl(enable);
+	}
+
+	if (ret)
+		SDEROT_ERR("failed %d sde_rotator_secure_session %d\n",
+			   ret, mdata->callback_request);
+
+	return ret;
+}
 
 static int sde_rotator_map_and_check_data(struct sde_rot_entry *entry)
 {
@@ -1048,6 +1082,8 @@ static int sde_rotator_assign_queue(struct sde_rot_mgr *mgr,
 		if (IS_ERR_OR_NULL(hw)) {
 			SDEROT_ERR("fail to allocate hw\n");
 			ret = PTR_ERR(hw);
+			if (!ret)
+				ret = -EINVAL;
 		} else {
 			queue->hw = hw;
 		}
@@ -1134,10 +1170,16 @@ static u32 sde_rotator_calc_buf_bw(struct sde_mdp_format_params *fmt,
 	u32 bw;
 
 	bw = width * height * frame_rate;
-	if (fmt->chroma_sample == SDE_MDP_CHROMA_420)
+
+	if (sde_mdp_is_tp10_format(fmt))
+		bw *= 2;
+	else if (sde_mdp_is_p010_format(fmt))
+		bw *= 3;
+	else if (fmt->chroma_sample == SDE_MDP_CHROMA_420)
 		bw = (bw * 3) / 2;
 	else
 		bw *= fmt->bpp;
+	SDEROT_EVTLOG(bw, width, height, frame_rate, fmt->format);
 	return bw;
 }
 
@@ -1187,6 +1229,15 @@ static int sde_rotator_calc_perf(struct sde_rot_mgr *mgr,
 	 *        W x H / throughput / (1/fps - overhead) * fudge_factor
 	 */
 	max_fps = sde_rotator_find_max_fps(mgr);
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	/* UHD Performance : increase perf just for UHD recording of which the fomat is not UBWC */
+	if(!sde_mdp_is_ubwc_format(in_fmt)) {
+		if(config->input.width * config->input.height >= ((3840-100)*(2160-100)))
+			max_fps = 90;
+	}
+#endif
+
 	perf->clk_rate = config->input.width * config->input.height;
 	perf->clk_rate = (perf->clk_rate * mgr->pixel_per_clk.denom) /
 			mgr->pixel_per_clk.numer;
@@ -1790,6 +1841,17 @@ static int sde_rotator_validate_entry(struct sde_rot_mgr *mgr,
 	int ret;
 	struct sde_rotation_item *item;
 	struct sde_rot_perf *perf;
+	struct sde_rot_data_type *mdata = sde_rot_get_mdata();
+
+	/* Check to ensure handoff is completed before 1st rotation request */
+	if (!mdata->handoff_done && mdata->handoff_pending) {
+		mdata->handoff_done = !mdata->handoff_pending();
+		if (!mdata->handoff_done) {
+			SDEROT_INFO(
+				"Splash Still on, Reject Rotation Request\n");
+			return -EINVAL;
+		}
+	}
 
 	item = &entry->item;
 
@@ -1930,7 +1992,7 @@ static void sde_rotator_cancel_request(struct sde_rot_mgr *mgr,
 	devm_kfree(&mgr->pdev->dev, req);
 }
 
-static void sde_rotator_cancel_all_requests(struct sde_rot_mgr *mgr,
+void sde_rotator_cancel_all_requests(struct sde_rot_mgr *mgr,
 	struct sde_rot_file_private *private)
 {
 	struct sde_rot_entry_container *req, *req_next;

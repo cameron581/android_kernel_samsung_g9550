@@ -540,8 +540,9 @@ int pfk_kc_load_key_start(const unsigned char *key, size_t key_size,
 			entry->state = ACTIVE_ICE_LOADED;
 
 			/*
-			 * only increase ref cnt for async calls, sync calls from
-			 * within work thread do not pass requests further to HW
+			 * only increase ref cnt for async calls,
+			 * sync calls from within work thread do not pass
+			 * requests further to HW
 			 */
 			if (async)
 				entry->loaded_ref_cnt++;

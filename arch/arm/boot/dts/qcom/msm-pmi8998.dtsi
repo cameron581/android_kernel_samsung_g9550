@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -155,6 +155,7 @@
 					   "usbin_i",
 					   "usbin_v";
 
+			qcom,boost-threshold-ua = <100000>;
 			qcom,wipower-max-uw = <5000000>;
 			dpdm-supply = <&qusb_phy0>;
 
@@ -163,11 +164,12 @@
 
 			qcom,chgr@1000 {
 				reg = <0x1000 0x100>;
-				interrupts = <0x2 0x10 0x0 IRQ_TYPE_NONE>,
-					     <0x2 0x10 0x1 IRQ_TYPE_NONE>,
-					     <0x2 0x10 0x2 IRQ_TYPE_NONE>,
-					     <0x2 0x10 0x3 IRQ_TYPE_NONE>,
-					     <0x2 0x10 0x4 IRQ_TYPE_NONE>;
+				interrupts =
+					<0x2 0x10 0x0 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x10 0x1 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x10 0x2 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x10 0x3 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x10 0x4 IRQ_TYPE_EDGE_RISING>;
 
 				interrupt-names = "chg-error",
 						  "chg-state-change",
@@ -178,10 +180,10 @@
 
 			qcom,otg@1100 {
 				reg = <0x1100 0x100>;
-				interrupts = <0x2 0x11 0x0 IRQ_TYPE_NONE>,
-					     <0x2 0x11 0x1 IRQ_TYPE_NONE>,
-					     <0x2 0x11 0x2 IRQ_TYPE_NONE>,
-					     <0x2 0x11 0x3 IRQ_TYPE_NONE>;
+				interrupts = <0x2 0x11 0x0 IRQ_TYPE_EDGE_BOTH>,
+					     <0x2 0x11 0x1 IRQ_TYPE_EDGE_BOTH>,
+					     <0x2 0x11 0x2 IRQ_TYPE_EDGE_BOTH>,
+					     <0x2 0x11 0x3 IRQ_TYPE_EDGE_BOTH>;
 
 				interrupt-names = "otg-fail",
 						  "otg-overcurrent",
@@ -191,12 +193,13 @@
 
 			qcom,bat-if@1200 {
 				reg = <0x1200 0x100>;
-				interrupts = <0x2 0x12 0x0 IRQ_TYPE_NONE>,
-					     <0x2 0x12 0x1 IRQ_TYPE_NONE>,
-					     <0x2 0x12 0x2 IRQ_TYPE_NONE>,
-					     <0x2 0x12 0x3 IRQ_TYPE_NONE>,
-					     <0x2 0x12 0x4 IRQ_TYPE_NONE>,
-					     <0x2 0x12 0x5 IRQ_TYPE_NONE>;
+				interrupts =
+					<0x2 0x12 0x0 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x12 0x1 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x12 0x2 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x12 0x3 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x12 0x4 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x12 0x5 IRQ_TYPE_EDGE_BOTH>;
 
 				interrupt-names = "bat-temp",
 						  "bat-ocp",
@@ -208,14 +211,15 @@
 
 			qcom,usb-chgpth@1300 {
 				reg = <0x1300 0x100>;
-				interrupts = <0x2 0x13 0x0 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x1 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x2 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x3 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x4 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x5 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x6 IRQ_TYPE_NONE>,
-					     <0x2 0x13 0x7 IRQ_TYPE_NONE>;
+				interrupts =
+					<0x2 0x13 0x0 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x13 0x1 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x13 0x2 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x13 0x3 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x13 0x4 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x13 0x5 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x13 0x6 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x13 0x7 IRQ_TYPE_EDGE_RISING>;
 
 				interrupt-names = "usbin-collapse",
 						  "usbin-lt-3p6v",
@@ -229,13 +233,14 @@
 
 			qcom,dc-chgpth@1400 {
 				reg = <0x1400 0x100>;
-				interrupts = <0x2 0x14 0x0 IRQ_TYPE_NONE>,
-					     <0x2 0x14 0x1 IRQ_TYPE_NONE>,
-					     <0x2 0x14 0x2 IRQ_TYPE_NONE>,
-					     <0x2 0x14 0x3 IRQ_TYPE_NONE>,
-					     <0x2 0x14 0x4 IRQ_TYPE_NONE>,
-					     <0x2 0x14 0x5 IRQ_TYPE_NONE>,
-					     <0x2 0x14 0x6 IRQ_TYPE_NONE>;
+				interrupts =
+					<0x2 0x14 0x0 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x14 0x1 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x14 0x2 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x14 0x3 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x14 0x4 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x14 0x5 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x14 0x6 IRQ_TYPE_EDGE_RISING>;
 
 				interrupt-names = "dcin-collapse",
 						  "dcin-lt-3p6v",
@@ -248,14 +253,15 @@
 
 			qcom,chgr-misc@1600 {
 				reg = <0x1600 0x100>;
-				interrupts = <0x2 0x16 0x0 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x1 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x2 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x3 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x4 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x5 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x6 IRQ_TYPE_NONE>,
-					     <0x2 0x16 0x7 IRQ_TYPE_NONE>;
+				interrupts =
+					<0x2 0x16 0x0 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x16 0x1 IRQ_TYPE_EDGE_RISING>,
+					<0x2 0x16 0x2 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x16 0x3 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x16 0x4 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x16 0x5 IRQ_TYPE_EDGE_BOTH>,
+					<0x2 0x16 0x6 IRQ_TYPE_EDGE_FALLING>,
+					<0x2 0x16 0x7 IRQ_TYPE_EDGE_BOTH>;
 
 				interrupt-names = "wdog-snarl",
 						  "wdog-bark",
@@ -289,6 +295,10 @@
 					  "msg-tx-failed",
 					  "msg-tx-discarded",
 					  "msg-rx-discarded";
+
+			qcom,default-sink-caps = <5000 3000>, /* 5V @ 3A */
+						 <9000 3000>, /* 9V @ 3A */
+						 <12000 2250>; /* 12V @ 2.25A */
 		};
 
 		bcl@4200 {
@@ -321,6 +331,7 @@
 			qcom,pmic-revid = <&pmi8998_revid>;
 			io-channels = <&pmi8998_rradc 0>;
 			io-channel-names = "rradc_batt_id";
+			qcom,rradc-base = <0x4500>;
 			qcom,fg-esr-timer-awake = <96>;
 			qcom,fg-esr-timer-asleep = <256>;
 			qcom,cycle-counter-en;
@@ -331,8 +342,10 @@
 				reg = <0x4000 0x100>;
 				interrupts = <0x2 0x40 0x0 IRQ_TYPE_EDGE_BOTH>,
 					     <0x2 0x40 0x1 IRQ_TYPE_EDGE_BOTH>,
-					     <0x2 0x40 0x2 IRQ_TYPE_EDGE_BOTH>,
-					     <0x2 0x40 0x3 IRQ_TYPE_EDGE_BOTH>,
+					     <0x2 0x40 0x2
+							IRQ_TYPE_EDGE_RISING>,
+					     <0x2 0x40 0x3
+							IRQ_TYPE_EDGE_RISING>,
 					     <0x2 0x40 0x4 IRQ_TYPE_EDGE_BOTH>,
 					     <0x2 0x40 0x5
 							IRQ_TYPE_EDGE_RISING>,
@@ -532,7 +545,6 @@
 
 				qcom,qpnp-ibb-soft-start = <1000>;
 
-				qcom,qpnp-ibb-discharge-resistor = <32>;
 				qcom,qpnp-ibb-lab-pwrup-delay = <8000>;
 				qcom,qpnp-ibb-lab-pwrdn-delay = <8000>;
 				qcom,qpnp-ibb-en-discharge;
@@ -585,16 +597,12 @@
 		pmi8998_wled: qcom,leds@d800 {
 			compatible = "qcom,qpnp-wled";
 			reg = <0xd800 0x100>,
-				<0xd900 0x100>,
-				<0xdc00 0x100>,
-				<0xde00 0x100>;
+				<0xd900 0x100>;
 			reg-names = "qpnp-wled-ctrl-base",
-					"qpnp-wled-sink-base",
-					"qpnp-wled-ibb-base",
-					"qpnp-wled-lab-base";
-			interrupts = <0x3 0xd8 0x2>;
-			interrupt-names = "sc-irq";
-			status = "okay";
+					"qpnp-wled-sink-base";
+			interrupts = <0x3 0xd8 0x1 IRQ_TYPE_EDGE_BOTH>,
+					<0x3 0xd8 0x2 IRQ_TYPE_EDGE_BOTH>;
+			interrupt-names = "ovp-irq", "sc-irq";
 			linux,name = "wled";
 			linux,default-trigger = "bkl-trigger";
 			qcom,fdbk-output = "auto";
@@ -609,19 +617,19 @@
 			qcom,sync-dly-us = <800>;
 			qcom,fs-curr-ua = <25000>;
 			qcom,cons-sync-write-delay-us = <1000>;
-			qcom,en-phase-stag;
 			qcom,led-strings-list = [00 01 02 03];
 			qcom,en-ext-pfet-sc-pro;
 			qcom,pmic-revid = <&pmi8998_revid>;
 			qcom,loop-auto-gm-en;
+			status = "okay";
 		};
 
 		pmi8998_haptics: qcom,haptic@c000 {
 			status = "disabled";
 			compatible = "qcom,qpnp-haptic";
 			reg = <0xc000 0x100>;
-			interrupts = <0x3 0xc0 0x0>,
-				     <0x3 0xc0 0x1>;
+			interrupts = <0x3 0xc0 0x0 IRQ_TYPE_NONE>,
+				     <0x3 0xc0 0x1 IRQ_TYPE_NONE>;
 			interrupt-names = "sc-irq", "play-irq";
 			qcom,actuator-type = "lra";
 			qcom,play-mode = "direct";
@@ -638,6 +646,8 @@
 			qcom,lra-high-z = "opt1";
 			qcom,lra-auto-res-mode = "qwd";
 			qcom,lra-res-cal-period = <4>;
+			qcom,correct-lra-drive-freq;
+			qcom,misc-trim-error-rc19p2-clk-reg-present;
 		};
 
 		flash_led: qcom,leds@d300 {

@@ -1318,11 +1318,15 @@ emsgsize:
 	 */
 	if (transhdrlen && sk->sk_protocol == IPPROTO_UDP &&
 	    headersize == sizeof(struct ipv6hdr) &&
-#if defined(CONFIG_MACH_DREAMQLTE_KDI) || defined(CONFIG_MACH_DREAM2QLTE_KDI)
-	    length < mtu - headersize - dst_exthdrlen &&
-#else
+	/* IPA HW support udp checksum offloading. So network stack try to offload UDP packet checksum to IPA HW
+	 * but it fail because of fragmentation and mtu size. In this case, we have to consider next 
+	 * ESP protocol header and should add 'dst_exthdrlen' value to compute UDP checksum in network stack normally
+	 * If next destination is xfrm, dst_exthdrlen was 8
+	 */
+#if 0
 	    length < mtu - headersize &&
 #endif
+	    length < mtu - headersize - dst_exthdrlen &&
 	    !(flags & MSG_MORE) &&
 	    rt->dst.dev->features & NETIF_F_V6_CSUM)
 		csummode = CHECKSUM_PARTIAL;
@@ -1427,6 +1431,11 @@ alloc_new_skb:
 			 */
 			alloclen += sizeof(struct frag_hdr);
 
+			copy = datalen - transhdrlen - fraggap;
+			if (copy < 0) {
+					err = -EINVAL;
+					goto error;
+			}
 			if (transhdrlen) {
 				skb = sock_alloc_send_skb(sk,
 						alloclen + hh_len,
@@ -1476,13 +1485,9 @@ alloc_new_skb:
 				data += fraggap;
 				pskb_trim_unique(skb_prev, maxfraglen);
 			}
-			copy = datalen - transhdrlen - fraggap;
-
-			if (copy < 0) {
-				err = -EINVAL;
-				kfree_skb(skb);
-				goto error;
-			} else if (copy > 0 && getfrag(from, data + transhdrlen, offset, copy, fraggap, skb) < 0) {
+			if (copy > 0 &&
+				getfrag(from, data + transhdrlen, offset,
+						copy, fraggap, skb) < 0) {
 				err = -EFAULT;
 				kfree_skb(skb);
 				goto error;

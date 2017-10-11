@@ -337,9 +337,9 @@ static int set_online(int event, int state)
 	}
 
 	if (state)
-		value.intval = POWER_SUPPLY_TYPE_SMART_OTG;
+		value.intval = SEC_BATTERY_CABLE_SMART_OTG;
 	else
-		value.intval = POWER_SUPPLY_TYPE_SMART_NOTG;
+		value.intval = SEC_BATTERY_CABLE_SMART_NOTG;
 
 	psy->desc->set_property(psy, POWER_SUPPLY_PROP_ONLINE, &value);
 
@@ -398,13 +398,15 @@ static struct otg_notify sec_otg_notify = {
 	.set_chg_current = usb_blocked_chg_control,
 #endif
 	.set_battcall = set_online,
+#if defined(CONFIG_USB_OTG_WHITELIST_FOR_MDM)
+	.sec_whitelist_enable = 0,
+#endif
 };
 
 static int usb_notifier_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct usb_notifier_platform_data *pdata = NULL;
-	struct otg_notify *o_notify;
 
 	pr_info("notifier_probe\n");
 
@@ -448,10 +450,6 @@ static int usb_notifier_probe(struct platform_device *pdev)
 	vbus_notifier_register(&pdata->vbus_nb, vbus_handle_notification,
 			       MUIC_NOTIFY_DEV_USB);
 #endif
-	o_notify = get_otg_notify();
-	o_notify->host_high = 0;
-	o_notify->host_super = 0;
-	init_waitqueue_head(&o_notify->host_device_recognition_wait_q);
 	dev_info(&pdev->dev, "usb notifier probe\n");
 	return 0;
 }

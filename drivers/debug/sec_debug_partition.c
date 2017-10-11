@@ -243,6 +243,7 @@ bool read_debug_partition(enum debug_partition_index index, void *value)
 			break;
 		case debug_index_reset_klog_info:
 		case debug_index_reset_summary_info:
+		case debug_index_reset_tzlog_info:
 			mutex_lock(&debug_partition_mutex);
 			sched_debug_data.value = value;
 			sched_debug_data.offset = SEC_DEBUG_RESET_HEADER_OFFSET;
@@ -272,11 +273,31 @@ bool read_debug_partition(enum debug_partition_index index, void *value)
 			wait_for_completion(&sched_debug_data.work);
 			mutex_unlock(&debug_partition_mutex);
 			break;
+		case debug_index_reset_tzlog:
+			mutex_lock(&debug_partition_mutex);
+			sched_debug_data.value = value;
+			sched_debug_data.offset = SEC_DEBUG_RESET_TZLOG_OFFSET;
+			sched_debug_data.size = SEC_DEBUG_RESET_TZLOG_SIZE;
+			sched_debug_data.direction = PARTITION_RD;
+			schedule_work(&sched_debug_data.debug_partition_work);
+			wait_for_completion(&sched_debug_data.work);
+			mutex_unlock(&debug_partition_mutex);
+			break;
 		case debug_index_ap_health:
 			mutex_lock(&debug_partition_mutex);
 			sched_debug_data.value = value;
 			sched_debug_data.offset = SEC_DEBUG_AP_HEALTH_OFFSET;
 			sched_debug_data.size = SEC_DEBUG_AP_HEALTH_SIZE;
+			sched_debug_data.direction = PARTITION_RD;
+			schedule_work(&sched_debug_data.debug_partition_work);
+			wait_for_completion(&sched_debug_data.work);
+			mutex_unlock(&debug_partition_mutex);
+			break;
+		case debug_index_reset_extrc_info:
+			mutex_lock(&debug_partition_mutex);
+			sched_debug_data.value = value;
+			sched_debug_data.offset = SEC_DEBUG_RESET_EXTRC_OFFSET;
+			sched_debug_data.size = SEC_DEBUG_RESET_EXTRC_SIZE;
 			sched_debug_data.direction = PARTITION_RD;
 			schedule_work(&sched_debug_data.debug_partition_work);
 			wait_for_completion(&sched_debug_data.work);
@@ -301,6 +322,7 @@ bool write_debug_partition(enum debug_partition_index index, void *value)
 	switch (index) {
 		case debug_index_reset_klog_info:
 		case debug_index_reset_summary_info:
+		case debug_index_reset_tzlog_info:
 			mutex_lock(&debug_partition_mutex);
 			sched_debug_data.value = (struct debug_reset_header *)value;
 			sched_debug_data.offset = SEC_DEBUG_RESET_HEADER_OFFSET;
@@ -333,6 +355,11 @@ static bool init_ap_health_data(void)
 	ap_health_data.header.magic = AP_HEALTH_MAGIC;
 	ap_health_data.header.version = AP_HEALTH_VER;
 	ap_health_data.header.size = sizeof(ap_health_t);
+	ap_health_data.spare_magic1 = AP_HEALTH_MAGIC;
+	ap_health_data.spare_magic2 = AP_HEALTH_MAGIC;
+	ap_health_data.spare_magic3 = AP_HEALTH_MAGIC;
+
+	pr_info("%s ap_health size[%ld]\n",__func__, sizeof(ap_health_t));
 
 	do {
 		if (retry++) {
@@ -373,6 +400,9 @@ ap_health_t* ap_health_data_read(void)
 	if (ap_health_data.header.magic != AP_HEALTH_MAGIC ||
 		ap_health_data.header.version != AP_HEALTH_VER ||
 		ap_health_data.header.size != sizeof(ap_health_t) ||
+		ap_health_data.spare_magic1 != AP_HEALTH_MAGIC ||
+		ap_health_data.spare_magic2 != AP_HEALTH_MAGIC ||
+		ap_health_data.spare_magic3 != AP_HEALTH_MAGIC ||
 		is_boot_recovery == 1) {
 		init_ap_health_data();
 	}
@@ -397,7 +427,6 @@ int ap_health_data_write(ap_health_t *data)
 	return 0;
 }
 EXPORT_SYMBOL(ap_health_data_write);
-
 
 static BLOCKING_NOTIFIER_HEAD(dbg_partition_notifier_list);
 

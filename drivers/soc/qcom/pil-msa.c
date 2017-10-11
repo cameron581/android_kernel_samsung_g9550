@@ -75,6 +75,9 @@
 #define MSS_RESTART_ID			0xA
 
 #define MSS_MAGIC			0XAABADEAD
+/* CX_IPEAK Parameters */
+#define CX_IPEAK_MSS			BIT(5)
+
 enum scm_cmd {
 	PAS_MEM_SETUP_CMD = 2,
 };
@@ -305,6 +308,14 @@ int pil_mss_shutdown(struct pil_desc *pil)
 									ret);
 	}
 
+	/*
+	 *  If MSS was in turbo state before fatal error occurs, it would
+	 *  have set the vote bit. Since MSS is restarting, So PIL need to
+	 *  clear this bit. This may clear the throttle state.
+	 */
+	if (drv->cx_ipeak_vote)
+		writel_relaxed(CX_IPEAK_MSS, drv->cxip_lm_vote_clear);
+
 	ret = pil_mss_restart_reg(drv, 1);
 
 	if (drv->is_booted) {
@@ -533,7 +544,7 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 {
 	struct q6v5_data *drv = container_of(pil, struct q6v5_data, desc);
 	struct modem_data *md = dev_get_drvdata(pil->dev);
-	const struct firmware *fw, *dp_fw;
+	const struct firmware *fw, *dp_fw = NULL;
 	char fw_name_legacy[10] = "mba.b00";
 	char fw_name[10] = "mba.mbn";
 	char *dp_name = "msadp";
@@ -605,7 +616,15 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 
 	/* Load the MBA image into memory */
 	count = fw->size;
-	memcpy(mba_dp_virt, data, count);
+	if (count <= SZ_1M) {
+		/* Ensures memcpy is done for max 1MB fw size */
+		memcpy(mba_dp_virt, data, count);
+	} else {
+		dev_err(pil->dev, "%s fw image loading into memory is failed due to fw size overflow\n",
+			__func__);
+		 ret = -EINVAL;
+		 goto err_mba_data;
+	}
 	/* Ensure memcpy of the MBA memory is done before loading the DP */
 	wmb();
 

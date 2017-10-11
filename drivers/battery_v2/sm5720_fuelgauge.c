@@ -669,7 +669,7 @@ static void sm5720_meas_mq_suspend (struct sm5720_fuelgauge_data *fuelgauge)
         sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_START_MQ, ((suspend_mq<<11)/1000));
         pr_info("%s: suspend mode mq is <0x%x>, AUX_2 : <0x%x> \n", __func__, suspend_mq, ret);
 
-        sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, 0);
+        sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, TH_SOC_INV);
     }
     else
     {
@@ -683,7 +683,7 @@ static void sm5720_meas_mq_resume (struct sm5720_fuelgauge_data *fuelgauge)
     ret = sm5720_read_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2);
     pr_info("%s: SM5720_FG_REG_AUX_2 : <0x%x> \n", __func__, ret);
 
-    sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, START_MQ);
+    sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, (START_MQ|TH_SOC_INV));
 }
 
 static void sm5720_meas_mq_start (struct sm5720_fuelgauge_data *fuelgauge)
@@ -702,7 +702,7 @@ static void sm5720_meas_mq_start (struct sm5720_fuelgauge_data *fuelgauge)
             pr_info("%s: starting mq is <0x%x> \n", __func__, mq);
 
             msleep(50);
-            sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, START_MQ);
+            sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, (START_MQ|TH_SOC_INV));
 
             // full mq set
             sm5720_set_full_chg_mq(fuelgauge, ((fuelgauge->info.cap * 1000) >> 11));            
@@ -749,10 +749,10 @@ static int sm5720_meas_mq_dump (struct sm5720_fuelgauge_data *fuelgauge)
         pr_info("%s: AUX_2 : <0x%x> \n", __func__, ret);
 
         ret = START_MQ | DUMP_MQ;
-        sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, ret);
+        sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, (ret|TH_SOC_INV));
         msleep(50);
         ret = START_MQ;
-        sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, ret);
+        sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, (ret|TH_SOC_INV));
 
         for(count = 0; count < 5; count++)
         {
@@ -799,7 +799,7 @@ static void sm5720_meas_mq_off (struct sm5720_fuelgauge_data *fuelgauge)
     last_mq = sm5720_meas_mq_dump(fuelgauge);
 
     sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_START_MQ, 0);
-    sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, 0);
+    sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_AUX_2, TH_SOC_INV);
 
     pr_info("%s: mq off completed, last_mq : %d\n", __func__, last_mq);
 }
@@ -1748,6 +1748,10 @@ static void sm5720_fg_test_read(struct sm5720_fuelgauge_data *fuelgauge)
 	pr_info("%s: 0xB0=0x%04x, 0xBC=0x%04x, 0xBD=0x%04x, 0xBE=0x%04x, 0xBF=0x%04x, 0x85=0x%04x, 0x86=0x%04x, 0x87=0x%04x, 0x1F=0x%04x, 0x94=0x%04x\n",
 		__func__, ret0, ret1, ret2, ret3, ret4, ret5, ret6, ret7, ret8, ret9);
 
+#if !defined(CONFIG_SEC_FACTORY)
+	sm5720_fg_periodic_read(fuelgauge);
+#endif
+
 	return;
 }
 
@@ -1781,8 +1785,6 @@ static void sm5720_update_all_value(struct sm5720_fuelgauge_data *fuelgauge)
 	sm5720_cal_carc(fuelgauge);
 	//soc
 	sm5720_get_soc(fuelgauge);
-
-	sm5720_fg_test_read(fuelgauge);
 
 	pr_info("%s: chg_h=%d, chg_f=%d, chg_s=%d, is_chg=%d, ta_exist=%d, "
 		"v=%d, v_avg=%d, i=%d, i_avg=%d, ocv=%d, fg_t=%d, b_t=%d, cycle=%d, soc=%d, state=0x%x, capacity_max=%d\n",
@@ -1879,6 +1881,9 @@ void sm5720_fg_reset_capacity_by_jig_connection(struct sm5720_fuelgauge_data *fu
 	sm5720_write_word(fuelgauge->i2c, SM5720_FG_REG_RESERVED, ret);
 	/* If JIG is attached, the voltage is set as 1079 */
 	value.intval = 1079;
+	psy_do_property("battery", set,
+			POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
+
 	psy_do_property("battery", set,
 			POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
 
@@ -2171,6 +2176,19 @@ bool sm5720_fg_reset(struct sm5720_fuelgauge_data *fuelgauge, bool is_quickstart
     return true;
 }
 
+static int sm5720_fg_check_capacity_max(
+	struct sm5720_fuelgauge_data *fuelgauge, int capacity_max)
+{
+	int cap_max, cap_min;
+
+	cap_max = fuelgauge->pdata->capacity_max;
+	cap_min = (fuelgauge->pdata->capacity_max -
+			fuelgauge->pdata->capacity_max_margin);
+
+	return (capacity_max < cap_min) ? cap_min :
+		((capacity_max >= cap_max) ? cap_max : capacity_max);
+}
+
 static void sm5720_fg_get_scaled_capacity(
     struct sm5720_fuelgauge_data *fuelgauge,
     union power_supply_propval *val)
@@ -2257,7 +2275,8 @@ static void sm5720_fg_get_scaled_capacity(
 				pr_info("%s : TEMP(%d) SAMPLE(%d) CAPACITY_MAX(%d)\n",
 					__func__, temp, sample, fuelgauge->capacity_max);
 
-				fuelgauge->capacity_max = max_temp;
+				fuelgauge->capacity_max = 
+					sm5720_fg_check_capacity_max(fuelgauge, max_temp);
 			}
 		} else
 			cnt = 0;
@@ -2307,22 +2326,28 @@ static void sm5720_fg_get_atomic_capacity(
 static int sm5720_fg_calculate_dynamic_scale(
     struct sm5720_fuelgauge_data *fuelgauge, int capacity)
 {
-    union power_supply_propval raw_soc_val;
-    raw_soc_val.intval = sm5720_get_soc(fuelgauge);
+	union power_supply_propval raw_soc_val;
+	raw_soc_val.intval = sm5720_get_soc(fuelgauge);
 
-    fuelgauge->capacity_max =
-        (raw_soc_val.intval * 100 / (capacity + 1));
-    fuelgauge->capacity_old = capacity;
+	if (raw_soc_val.intval <
+		fuelgauge->pdata->capacity_max -
+		fuelgauge->pdata->capacity_max_margin) {
+		pr_info("%s: raw soc(%d) is very low, skip routine\n",
+			__func__, raw_soc_val.intval);
+	} else {
+		fuelgauge->capacity_max =
+			(raw_soc_val.intval * 100 / (capacity + 1));
+		fuelgauge->capacity_old = capacity;
 
-    pr_info("%s: %d is used for capacity_max, capacity(%d)\n",
-        __func__, fuelgauge->capacity_max, capacity);
+		fuelgauge->capacity_max =
+			sm5720_fg_check_capacity_max(fuelgauge,
+			fuelgauge->capacity_max);
 
-    if(fuelgauge->capacity_max > CAPACITY_MAX_THRESHOLD) {
-        pr_info("%s capacity_max is over 1000 \n", __func__);
-        fuelgauge->capacity_max = CAPACITY_MAX_THRESHOLD;
-    }
+		pr_info("%s: %d is used for capacity_max, capacity(%d)\n",
+			__func__, fuelgauge->capacity_max, capacity);
+	}
 
-    return fuelgauge->capacity_max;
+	return fuelgauge->capacity_max;
 }
 
 static int calc_ttf(struct sm5720_fuelgauge_data *fuelgauge, union power_supply_propval *val)
@@ -2466,14 +2491,11 @@ static int sm5720_fg_get_property(struct power_supply *psy,
     case POWER_SUPPLY_PROP_VOLTAGE_AVG:
         switch (val->intval) {
         case SEC_BATTERY_VOLTAGE_OCV:
-			sm5720_get_ocv(fuelgauge);
 			val->intval = fuelgauge->info.batt_ocv;
+			sm5720_fg_test_read(fuelgauge);
             break;
         case SEC_BATTERY_VOLTAGE_AVERAGE:
             val->intval = fuelgauge->info.batt_avgvoltage;
-#if !defined(CONFIG_SEC_FACTORY)
-            sm5720_fg_periodic_read(fuelgauge);
-#endif
             break;
         }
         break;
@@ -2503,7 +2525,7 @@ static int sm5720_fg_get_property(struct power_supply *psy,
             break;
         case SEC_BATTERY_CAPACITY_CURRENT:
 		case SEC_BATTERY_CAPACITY_QH:
-			val->intval = sm5720_meas_mq_dump(fuelgauge);
+			val->intval = (fuelgauge->info.cap * 1000) >> 11;
             break;
         case SEC_BATTERY_CAPACITY_CYCLE:
             sm5720_get_cycle(fuelgauge);
@@ -2511,7 +2533,7 @@ static int sm5720_fg_get_property(struct power_supply *psy,
             break;
 		case SEC_BATTERY_CAPACITY_FULL:
 		case SEC_BATTERY_CAPACITY_AGEDCELL:
-			val->intval = sm5720_get_full_chg_mq(fuelgauge);
+			val->intval = (fuelgauge->info.cap * 1000) >> 11;
 			break;
 		case SEC_BATTERY_CAPACITY_VFSOC:
 			val->intval = fuelgauge->info.batt_soc * 100;
@@ -2528,11 +2550,16 @@ static int sm5720_fg_get_property(struct power_supply *psy,
 		} else
 			val->intval = fuelgauge->info.batt_soc;
 
-            if (fuelgauge->pdata->capacity_calculation_type &
-                (SEC_FUELGAUGE_CAPACITY_TYPE_SCALE |
-                 SEC_FUELGAUGE_CAPACITY_TYPE_DYNAMIC_SCALE))
-                sm5720_fg_get_scaled_capacity(fuelgauge, val);
+		if (fuelgauge->pdata->capacity_calculation_type &
+			(SEC_FUELGAUGE_CAPACITY_TYPE_SCALE |
+			SEC_FUELGAUGE_CAPACITY_TYPE_DYNAMIC_SCALE)){
+			sm5720_fg_get_scaled_capacity(fuelgauge, val);
 
+			if (val->intval > 1010){
+				pr_info("%s : scaled capacity (%d) \n", __func__,val->intval);
+				sm5720_fg_calculate_dynamic_scale(fuelgauge, 100);
+			}
+		}
             /* capacity should be between 0% and 100%
              * (0.1% degree)
              */
@@ -2702,8 +2729,9 @@ static int sm5720_fg_set_property(struct power_supply *psy,
         /* Battery Temperature */
     case POWER_SUPPLY_PROP_CAPACITY:
         if (val->intval == SEC_FUELGAUGE_CAPACITY_TYPE_RESET) {
+            bool error = sm5720_fg_reset(fuelgauge, true);
             fuelgauge->initial_update_of_soc = true;
-            if (!sm5720_fg_reset(fuelgauge, true))
+            if (!error)
                 return -EINVAL;
             else
                 break;
@@ -2724,16 +2752,12 @@ static int sm5720_fg_set_property(struct power_supply *psy,
 	break;
     case POWER_SUPPLY_PROP_ENERGY_NOW:
         sm5720_fg_get_jig_mode_real_vbat(fuelgauge, val->intval);
+		sm5720_fg_reset_capacity_by_jig_connection(fuelgauge);
         break;
     case POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN:
         pr_info("%s: capacity_max changed, %d -> %d\n",
             __func__, fuelgauge->capacity_max, val->intval);
-        fuelgauge->capacity_max = val->intval;
-
-        if(fuelgauge->capacity_max > CAPACITY_MAX_THRESHOLD) {
-			pr_info("%s capacity_max is over 1000 \n", __func__);
-			fuelgauge->capacity_max = CAPACITY_MAX_THRESHOLD;
-        }
+        fuelgauge->capacity_max = sm5720_fg_check_capacity_max(fuelgauge, val->intval);
         fuelgauge->initial_update_of_soc = true;
         break;
     case POWER_SUPPLY_PROP_CHARGE_ENABLED:
@@ -2879,6 +2903,24 @@ static int sm5720_fuelgauge_parse_dt_for_age(struct sm5720_fuelgauge_data *fuelg
 }
 #endif
 
+static int sm5720_fuelgauge_parse_dt_for_cable_info(struct sm5720_fuelgauge_data *fuelgauge)
+{
+	struct device_node *np = of_find_node_by_name(NULL, "cable-info");
+	int ret;
+	
+	if (np == NULL) {
+		pr_err("%s np NULL\n", __func__);
+	} else {
+		ret = of_property_read_u32(np, "full_check_current_1st",
+			&fuelgauge->pdata->full_check_current_1st);
+		if (ret < 0)
+			pr_err("%s error reading full_check_current_1st %d\n", __func__, ret);
+		else
+			pr_info("%s : full_check_current_1st=%d\n",
+				__func__,fuelgauge->pdata->full_check_current_1st);
+	}
+	return 0;
+}	
 static int sm5720_fuelgauge_parse_dt(struct sm5720_fuelgauge_data *fuelgauge)
 {
     char prop_name[PROPERTY_NAME_SIZE];
@@ -2923,13 +2965,21 @@ static int sm5720_fuelgauge_parse_dt(struct sm5720_fuelgauge_data *fuelgauge)
 		if (ret < 0)
 			pr_err("%s error reading capacity_max %d\n", __func__, ret);
 
+		ret = of_property_read_u32(np, "fuelgauge,capacity_max_margin",
+				&fuelgauge->pdata->capacity_max_margin);
+		if (ret < 0) {
+			pr_err("%s error reading capacity_max_margin %d\n", __func__, ret);
+			fuelgauge->pdata->capacity_max_margin = 300;
+		}
+
 		ret = of_property_read_u32(np, "fuelgauge,capacity_min",
 				&fuelgauge->pdata->capacity_min);
 		if (ret < 0)
 			pr_err("%s error reading capacity_min %d\n", __func__, ret);
 
-		pr_info("%s: capacity_max: %d, capacity_min: %d\n", __func__, 
-			fuelgauge->pdata->capacity_max, fuelgauge->pdata->capacity_min);
+		pr_info("%s: capacity_max: %d, capacity_max_margin: %d, capacity_min: %d\n",
+			__func__, fuelgauge->pdata->capacity_max, 
+			fuelgauge->pdata->capacity_max_margin, fuelgauge->pdata->capacity_min);
 
 		ret = of_property_read_u32(np, "fuelgauge,capacity_calculation_type",
 				&fuelgauge->pdata->capacity_calculation_type);
@@ -3483,6 +3533,7 @@ static int sm5720_fuelgauge_probe(struct platform_device *pdev)
         pr_err("%s not found charger dt! ret[%d]\n",
                __func__, ret);
     }
+    sm5720_fuelgauge_parse_dt_for_cable_info(fuelgauge);
 #endif
 
     platform_set_drvdata(pdev, fuelgauge);

@@ -424,6 +424,7 @@ DECLARE_TIMEOUT_FUNC(mouse);
 DECLARE_TIMEOUT_FUNC(mouse_wheel);
 DECLARE_TIMEOUT_FUNC(pen);
 DECLARE_TIMEOUT_FUNC(hover);
+DECLARE_TIMEOUT_FUNC(key_two);
 
 // ********** Define Set Booster Functions ********** //
 DECLARE_SET_BOOSTER_FUNC(touch);
@@ -435,6 +436,7 @@ DECLARE_SET_BOOSTER_FUNC(mouse);
 DECLARE_SET_BOOSTER_FUNC(mouse_wheel);
 DECLARE_SET_BOOSTER_FUNC(pen);
 DECLARE_SET_BOOSTER_FUNC(hover);
+DECLARE_SET_BOOSTER_FUNC(key_two);
 
 // ********** Define State Functions ********** //
 DECLARE_STATE_FUNC(idle)
@@ -445,6 +447,7 @@ DECLARE_STATE_FUNC(idle)
 		int i;
 		pr_debug("[Input Booster] %s      State0 : Idle  index : %d, cpu : %d, time : %d, input_booster_event : %d\n", glGage, _this->index, _this->param[_this->index].cpu_freq, _this->param[_this->index].time, input_booster_event);
 		_this->index=0;
+		_this->level=-1;
 		for(i=0;i<2;i++) {
 			if(delayed_work_pending(&_this->input_booster_timeout_work[i])) {
 				pr_debug("[Input Booster] ****             cancel the pending workqueue\n");
@@ -512,7 +515,7 @@ void input_booster(struct input_dev *dev)
 		} else if (input_events[i].type == EV_KEY) {
 			switch (input_events[i].code) {
 				case BTN_TOUCH :
-					if(input_events[i+1].type == EV_KEY && input_events[i+1].code == BTN_TOOL_PEN) {
+					if(input_events[i+1].type == EV_ABS && input_events[i+1].code == ABS_PRESSURE) {
 						if(input_events[i].value && !pen_booster.multi_events) {
 							pr_debug("[Input Booster] PEN EVENT - PRESS\n");
 							RUN_BOOSTER(pen, BOOSTER_ON);
@@ -570,6 +573,11 @@ void input_booster(struct input_dev *dev)
 				case KEY_POWER :
 					pr_debug("[Input Booster] KEY EVENT - %s\n", (input_events[i].value) ? "PRESS" : "RELEASE");
 					RUN_BOOSTER(key, (input_events[i].value) ? BOOSTER_ON : BOOSTER_OFF );
+					DetectedCategory = true;
+					break;
+				case KEY_WINK :
+					pr_debug("[Input Booster] key_two KEY EVENT - %s\n", (input_events[i].value) ? "PRESS" : "RELEASE");
+					RUN_BOOSTER(key_two, (input_events[i].value) ? BOOSTER_ON : BOOSTER_OFF );
 					DetectedCategory = true;
 					break;
 				default :
@@ -758,6 +766,7 @@ void input_booster_init()
 	INIT_BOOSTER(mouse_wheel)
 	INIT_BOOSTER(pen)
 	INIT_BOOSTER(hover)
+	INIT_BOOSTER(key_two)
 	multitouch_booster.change_on_release = 1;
 
 	// ********** Initialize Sysfs **********
@@ -784,7 +793,22 @@ void input_booster_init()
 		INIT_SYSFS_DEVICE(mouse_wheel)
 		INIT_SYSFS_DEVICE(pen)
 		INIT_SYSFS_DEVICE(hover)
+		INIT_SYSFS_DEVICE(key_two)
 	}
+#if defined(CONFIG_ARCH_MSM)
+	for (i = 0; i < touch_reg_bus_scale_table.num_usecases; i++) {
+		touch_reg_bus_usecases[i].num_paths = 1;
+		touch_reg_bus_usecases[i].vectors = &touch_reg_bus_vectors[i];
+	}
+
+	bus_hdl = msm_bus_scale_register_client(&touch_reg_bus_scale_table);
+#endif
+}
+void input_booster_exit(void)
+{
+#if defined(CONFIG_ARCH_MSM)
+	msm_bus_scale_unregister_client(bus_hdl);
+#endif
 }
 #endif  // Input Booster -
 
@@ -997,11 +1021,14 @@ int input_open_device(struct input_handle *handle)
 
 	handle->open++;
 
-	if (!dev->users++ && dev->open)
+	dev->users_private++;
+	if (!dev->disabled && !dev->users++ && dev->open)
 		retval = dev->open(dev);
 
 	if (retval) {
-		dev->users--;
+		dev->users_private--;
+		if (!dev->disabled)
+			dev->users--;
 		if (!--handle->open) {
 			/*
 			 * Make sure we are not delivering any more events
@@ -1049,7 +1076,8 @@ void input_close_device(struct input_handle *handle)
 
 	__input_release_device(handle);
 
-	if (!--dev->users && dev->close)
+	--dev->users_private;
+	if (!dev->disabled && !--dev->users && dev->close)
 		dev->close(dev);
 
 	if (!--handle->open) {
@@ -1075,13 +1103,12 @@ static int input_enable_device(struct input_dev *dev)
 	if (!dev->disabled)
 		goto out;
 
-	if (dev->open) {
+	if (dev->users_private && dev->open) {
 		retval = dev->open(dev);
 		if (retval)
 			goto out;
 	}
-
-	dev->users = 1;
+	dev->users = dev->users_private;
 	dev->disabled = false;
 
 out:
@@ -2930,6 +2957,9 @@ static int __init input_init(void)
 static void __exit input_exit(void)
 {
 	input_proc_exit();
+#if !defined(CONFIG_INPUT_BOOSTER) // Input Booster +
+	input_booster_exit();
+#endif  // Input Booster -
 	unregister_chrdev_region(MKDEV(INPUT_MAJOR, 0),
 				 INPUT_MAX_CHAR_DEVICES);
 	class_unregister(&input_class);

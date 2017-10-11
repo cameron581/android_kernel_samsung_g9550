@@ -178,6 +178,8 @@
 #define RDS_WAITING			5
 #define SEEK_CANCEL			6
 
+#define VOLUME_NUM 16
+
 /**************************************************************************
  * General Driver Definitions
  **************************************************************************/
@@ -206,6 +208,8 @@ struct rtc6213n_device {
 	bool stci_enabled;      /* Seek/Tune Complete Interrupt */
 
 	struct i2c_client *client;
+	bool vol_db;
+	int rx_vol[VOLUME_NUM];
 };
 
 /**************************************************************************

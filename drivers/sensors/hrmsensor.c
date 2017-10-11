@@ -85,7 +85,7 @@ static struct hrm_func adpd_func = {
 #define SLAVE_ADDR_MAX 0x57
 #define SLAVE_ADDR_ADPD 0x64
 
-#define VERSION				"09"
+#define VERSION				"15"
 
 int hrm_debug = 1;
 int hrm_info;
@@ -169,7 +169,7 @@ static void hrm_irq_set_state(struct hrm_device_data *data, int irq_enable)
 static int hrm_power_ctrl(struct hrm_device_data *data, int onoff)
 {
 	int rc = 0;
-	static int i2c_1p8_enable = 0;
+	static int i2c_1p8_enable;
 	struct regulator *regulator_led_3p3;
 	struct regulator *regulator_vdd_1p8;
 	struct regulator *regulator_i2c_1p8;
@@ -210,8 +210,13 @@ static int hrm_power_ctrl(struct hrm_device_data *data, int onoff)
 	}
 
 #ifdef CONFIG_ARCH_MSM
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	regulator_vdd_1p8 =
+		regulator_get(&data->pdev->dev, "hrmsensor_1p8");
+#else
 	regulator_vdd_1p8 =
 		regulator_get(&data->hrm_i2c_client->dev, "hrmsensor_1p8");
+#endif
 #else /* EXYNOS8890 */
 	regulator_vdd_1p8 = regulator_get(NULL, data->vdd_1p8);
 #endif
@@ -223,8 +228,13 @@ static int hrm_power_ctrl(struct hrm_device_data *data, int onoff)
 	}
 
 #ifdef CONFIG_ARCH_MSM
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	regulator_led_3p3 =
+		regulator_get(&data->pdev->dev, "hrmsensor_3p3");
+#else
 	regulator_led_3p3 =
 		regulator_get(&data->hrm_i2c_client->dev, "hrmsensor_3p3");
+#endif
 #else /* EXYNOS8890 */
 	regulator_led_3p3 = regulator_get(NULL, data->led_3p3);
 #endif
@@ -316,7 +326,7 @@ enable_vdd_1p8_failed:
 enable_i2c_1p8_failed:
 done:
 	regulator_put(regulator_led_3p3);
-get_led_3p3_failed:	
+get_led_3p3_failed:
 	regulator_put(regulator_vdd_1p8);
 get_vdd_1p8_failed:
 	if (data->i2c_1p8 != NULL)
@@ -485,6 +495,14 @@ void hrm_mode_enable(struct hrm_device_data *data,
 		err = hrm_enable(data, mode);
 		if (err != 0)
 			HRM_dbg("enable err : %d\n", err);
+
+		if (err < 0 && mode == MODE_AMBIENT){
+			input_report_rel(data->hrm_input_dev,
+				REL_Y, -5 + 1); //F_ERR_I2C			-5  /* detected i2c error */
+			input_sync(data->hrm_input_dev);
+			HRM_dbg("%s - awb mode enable error\n",
+				__func__);
+		}		
 	} else {
 		if (data->regulator_state == 0) {
 			HRM_dbg("%s - already power off - disable skip\n",
@@ -818,7 +836,8 @@ static ssize_t hrm_eol_test_store(struct device *dev,
 		mutex_unlock(&data->activelock);
 		return -EINVAL;
 	}
-	hrm_eol_test_onoff(data, test_onoff);
+	if (hrm_eol_test_onoff(data, test_onoff) < 0)
+		data->eol_test_is_enable = 0;
 
 	mutex_unlock(&data->activelock);
 	return size;
@@ -1157,7 +1176,7 @@ struct device_attribute *attr, char *buf)
 		HRM_dbg("%s sensor_info_data = %s\n", __func__, sensor_info_data);
 
 		return snprintf(buf, PAGE_SIZE, "%s\n", sensor_info_data);
-			
+
 	} else {
 		HRM_dbg("%s sensor_info_data not support\n", __func__);
 
@@ -1251,7 +1270,7 @@ irqreturn_t hrm_irq_handler(int hrm_irq, void *device)
 	struct hrm_device_data *data = device;
 	struct hrm_output_data read_data;
 	int i;
-	static unsigned int sample_cnt = 0;
+	static unsigned int sample_cnt;
 
 	memset(&read_data, 0, sizeof(struct hrm_output_data));
 
@@ -1265,8 +1284,8 @@ irqreturn_t hrm_irq_handler(int hrm_irq, void *device)
 
 	err = hrm_read_data(data, &read_data);
 
-	if(sample_cnt++ > 100) {
-		HRM_dbg("%s mode:0x%x main:%d,%d sub:%d,%d,%d,%d,%d,%d,%d,%d ", __func__,
+	if (sample_cnt++ > 100) {
+		HRM_dbg("%s mode:0x%x main:%d,%d sub:%d,%d,%d,%d,%d,%d,%d,%d\n", __func__,
 				read_data.mode, read_data.data_main[0], read_data.data_main[1], read_data.data_sub[0],
 				read_data.data_sub[1], read_data.data_sub[2], read_data.data_sub[3], read_data.data_sub[4],
 				read_data.data_sub[5], read_data.data_sub[6], read_data.data_sub[7]);
@@ -1282,7 +1301,7 @@ irqreturn_t hrm_irq_handler(int hrm_irq, void *device)
 					input_report_rel(data->hrm_input_dev,
 						REL_Y,  read_data.fifo_main[1][i] + 1);
 					input_sync(data->hrm_input_dev);
-				}		
+				}
 			} else {
 					for (i = 0; i < read_data.main_num; i++)
 						input_report_rel(data->hrm_input_dev,
@@ -1307,7 +1326,11 @@ irqreturn_t hrm_irq_handler(int hrm_irq, void *device)
 
 static int hrm_parse_dt(struct hrm_device_data *data)
 {
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	struct device *dev = &data->pdev->dev;
+#else
 	struct device *dev = &data->hrm_i2c_client->dev;
+#endif
 	struct device_node *dNode = dev->of_node;
 	enum of_gpio_flags flags;
 
@@ -1458,18 +1481,25 @@ int hrm_set_func(struct hrm_device_data *data)
 	return err;
 }
 
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+static int hrm_probe(struct platform_device *pdev)
+#else
 int hrm_probe(struct i2c_client *client, const struct i2c_device_id *id)
+#endif
 {
 	int err = -ENODEV;
 
 	struct hrm_device_data *data;
 
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	u32 addr = 0;
+#else
 	/* check to make sure that the adapter supports I2C */
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		HRM_dbg("%s - I2C_FUNC_I2C not supported\n", __func__);
 		return -ENODEV;
 	}
-
+#endif
 	/* allocate some memory for the device */
 	data = kzalloc(sizeof(struct hrm_device_data), GFP_KERNEL);
 	if (data == NULL) {
@@ -1479,9 +1509,30 @@ int hrm_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	hrm_init_device_data(data);
 
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	if (!pdev->dev.of_node) {
+		HRM_dbg("%s - failed, DT is NULL\n", __func__);
+		goto err_get_dt;
+	}
+	data->hrm_i2c_client = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
+	if (data->hrm_i2c_client == NULL) {
+		HRM_dbg("%s - couldn't allocate memory\n", __func__);
+		goto err_allocate_memory;
+	}
+
+	data->pdev = pdev;
+	err = of_property_read_u32(data->pdev->dev.of_node, "reg", &addr);
+	if (err < 0) {
+		HRM_dbg("%s - Unable to read hrmsensor slave addr\n", __func__);
+		goto err_read_reg;
+	}
+	HRM_dbg("%s - hrmsensor slave addr(0x%p) = 0x%x\n", __func__, data->pdev->dev.of_node, addr);
+	data->hrm_i2c_client->addr = addr;
+
+#else
 	data->hrm_i2c_client = client;
 	i2c_set_clientdata(client, data);
-
+#endif
 	mutex_init(&data->i2clock);
 	mutex_init(&data->activelock);
 
@@ -1614,6 +1665,12 @@ err_parse_dt:
 		data->pins_sleep = NULL;
 	mutex_destroy(&data->i2clock);
 	mutex_destroy(&data->activelock);
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+err_read_reg:
+	kfree(data->hrm_i2c_client);
+err_allocate_memory:
+err_get_dt:
+#endif
 	kfree(data);
 	HRM_dbg("%s failed\n", __func__);
 done:
@@ -1621,9 +1678,17 @@ done:
 }
 
 
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+static int hrm_remove(struct platform_device *pdev)
+#else
 int hrm_remove(struct i2c_client *client)
+#endif
 {
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	struct hrm_device_data *data = dev_get_drvdata(&pdev->dev);
+#else
 	struct hrm_device_data *data = i2c_get_clientdata(client);
+#endif
 	int err;
 
 	HRM_dbg("%s\n", __func__);
@@ -1659,15 +1724,18 @@ int hrm_remove(struct i2c_client *client)
 
 	kfree(data->lib_ver);
 	kfree(data);
+#ifndef CONFIG_SPI_TO_I2C_FPGA
 	i2c_set_clientdata(client, NULL);
-
+#endif
 	return 0;
 }
 
+#ifndef CONFIG_SPI_TO_I2C_FPGA
 static void hrm_shutdown(struct i2c_client *client)
 {
 	HRM_dbg("%s\n", __func__);
 }
+#endif
 #ifdef CONFIG_PM
 static int hrm_pm_suspend(struct device *dev)
 {
@@ -1709,33 +1777,53 @@ static const struct i2c_device_id hrm_device_id[] = {
 	{ }
 };
 /* descriptor of the hrmsensor I2C driver */
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+static struct platform_driver hrm_i2c_driver = {
+	.driver = {
+	    .name = "hrmsensor",
+	    .owner = THIS_MODULE,
+		.of_match_table = hrm_match_table,
+	},
+	.probe = hrm_probe,
+	.remove = hrm_remove,
+};
+#else
 static struct i2c_driver hrm_i2c_driver = {
 	.driver = {
 	    .name = "hrmsensor",
 	    .owner = THIS_MODULE,
-#ifdef CONFIG_PM
+#if defined(CONFIG_PM)
 	    .pm = &hrm_pm_ops,
 #endif
 	    .of_match_table = hrm_match_table,
 	},
 	.probe = hrm_probe,
-	.shutdown = hrm_shutdown,
 	.remove = hrm_remove,
+	.shutdown = hrm_shutdown,
 	.id_table = hrm_device_id,
 };
+#endif
 
 /* initialization and exit functions */
 static int __init hrm_init(void)
 {
 	if (!lpcharge)
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+		return platform_driver_register(&hrm_i2c_driver);
+#else
 		return i2c_add_driver(&hrm_i2c_driver);
+#endif
 	else
 		return 0;
 }
 
 static void __exit hrm_exit(void)
 {
+#ifdef CONFIG_SPI_TO_I2C_FPGA
+	platform_driver_unregister(&hrm_i2c_driver);
+#else
 	i2c_del_driver(&hrm_i2c_driver);
+#endif
 }
 
 module_init(hrm_init);

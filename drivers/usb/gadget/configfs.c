@@ -364,8 +364,10 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
 				sizeof(product_string) - 1);
 #endif
 		ret = usb_udc_attach_driver(name, &gi->composite.gadget_driver);
-		if (ret)
+		if (ret) {
+			pr_err("usb: %s - failed to attach udc driver\n", __func__);
 			goto err;
+		}
 		gi->udc_name = name;
 	}
 	mutex_unlock(&gi->lock);
@@ -482,7 +484,6 @@ static int config_usb_cfg_link(
 	}
 
 	f = usb_get_function(fi);
-
 	if (f == NULL) {
 		/* Are we trying to symlink PTP without MTP function? */
 		ret = -EINVAL; /* Invalid Configuration */
@@ -1351,7 +1352,7 @@ static void purge_configs_funcs(struct gadget_info *gi)
 			list_move_tail(&f->list, &cfg->func_list);
 			if (f->unbind) {
 				dev_err(&gi->cdev.gadget->dev, "unbind function"
-						" '%s'/%p\n", f->name, f);
+						" '%s'/%pK\n", f->name, f);
 				f->unbind(c, f);
 			}
 		}
@@ -1532,7 +1533,6 @@ static void android_work(struct work_struct *data)
 	bool uevent_sent = false;
 
 	spin_lock_irqsave(&cdev->lock, flags);
-
 	if (cdev->config)
 		status[1] = true;
 
@@ -1595,7 +1595,7 @@ static void android_work(struct work_struct *data)
 	}
 
 	if (!uevent_sent) {
-		pr_info("usb: %s did not send uevent (%d %d %p)\n", __func__,
+		pr_info("usb: %s did not send uevent (%d %d %pK)\n", __func__,
 			gi->connected, gi->sw_connected, cdev->config);
 	}
 }

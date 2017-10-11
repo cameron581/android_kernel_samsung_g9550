@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -58,6 +58,7 @@
 #define MDSS_DSI_HW_REV_104_1           0x10040001      /* 8996   */
 #define MDSS_DSI_HW_REV_104_2           0x10040002      /* 8937   */
 #define MDSS_DSI_HW_REV_200		0x20000000	/* cobalt */
+#define MDSS_DSI_HW_REV_201		0x20010000	/* 660 */
 
 #define MDSS_DSI_HW_REV_STEP_0		0x0
 #define MDSS_DSI_HW_REV_STEP_1		0x1
@@ -355,6 +356,7 @@ struct dsi_panel_cmds {
 	char *read_size;
 	char *read_startoffset;
 	char *name;
+	int exclusive_pass;
 #endif
 
 };
@@ -468,6 +470,7 @@ struct mdss_dsi_ctrl_pdata {
 	int rst_gpio;
 	int disp_en_gpio;
 	int bklt_en_gpio;
+	bool bklt_en_gpio_invert;
 	int lcd_mode_sel_gpio;
 	int bklt_ctrl;	/* backlight ctrl */
 	bool pwm_pmi;
@@ -505,6 +508,8 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_panel_cmds post_dms_on_cmds;
 	struct dsi_panel_cmds post_panel_on_cmds;
 	struct dsi_panel_cmds off_cmds;
+	struct dsi_panel_cmds lp_on_cmds;
+	struct dsi_panel_cmds lp_off_cmds;
 	struct dsi_panel_cmds status_cmds;
 	u32 *status_valid_params;
 	u32 *status_cmds_rlen;
@@ -713,6 +718,7 @@ void mdss_dsi_dfps_config_8996(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_set_burst_mode(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_set_reg(struct mdss_dsi_ctrl_pdata *ctrl, int off,
 	u32 mask, u32 val);
+int mdss_dsi_phy_pll_reset_status(struct mdss_dsi_ctrl_pdata *ctrl);
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 void mdss_dsi_samsung_poc_perf_mode_ctl(struct mdss_dsi_ctrl_pdata *ctrl, int enable);
@@ -919,6 +925,11 @@ static inline bool mdss_dsi_is_panel_on_interactive(
 static inline bool mdss_dsi_is_panel_on_lp(struct mdss_panel_data *pdata)
 {
 	return mdss_panel_is_power_on_lp(pdata->panel_info.panel_power_state);
+}
+
+static inline bool mdss_dsi_is_panel_on_ulp(struct mdss_panel_data *pdata)
+{
+	return mdss_panel_is_power_on_ulp(pdata->panel_info.panel_power_state);
 }
 
 static inline bool mdss_dsi_ulps_feature_enabled(
