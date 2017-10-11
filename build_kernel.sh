@@ -12,7 +12,7 @@ export SEC_BUILD_OPTION_HW_REVISION=02
 [ -d ${OUT_DIR} ] && rm -rf ${OUT_DIR}
 mkdir ${OUT_DIR}
 
-make ${COMMON_ARGS} dreamqlte_chn_open_defconfig
+make ${COMMON_ARGS} dream2qlte_chn_open_defconfig
 make -j64 ${COMMON_ARGS}
 
 cp ${OUT_DIR}/arch/arm64/boot/Image $(pwd)/arch/arm64/boot/Image
